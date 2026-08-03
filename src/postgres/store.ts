@@ -391,20 +391,34 @@ export class PostgresDurableJobStore implements DurableJobStore {
         }
       }
 
-      const update = await client.query(
-        `update ${q(this.tables.jobs)}
-         set next_run_at_utc = $2::timestamptz,
-             updated_at_utc = now()
+      const locked = await client.query(
+        `select next_run_at_utc
+         from ${q(this.tables.jobs)}
          where job_name = $1
            and enabled = true
-           and next_run_at_utc = $3::timestamptz`,
-        [recurring.jobName, nextRunAtUtc, recurring.nextRunAtUtc]
+         for update`,
+        [recurring.jobName]
       );
 
-      if ((update.rowCount ?? 0) === 0) {
+      if ((locked.rowCount ?? 0) === 0) {
         await client.query("rollback");
         return false;
       }
+
+      const currentNextRun = new Date(String(locked.rows[0]?.next_run_at_utc)).getTime();
+      const expectedNextRun = new Date(recurring.nextRunAtUtc).getTime();
+      if (Math.abs(currentNextRun - expectedNextRun) > 1) {
+        await client.query("rollback");
+        return false;
+      }
+
+      await client.query(
+        `update ${q(this.tables.jobs)}
+         set next_run_at_utc = $2::timestamptz,
+             updated_at_utc = now()
+         where job_name = $1`,
+        [recurring.jobName, nextRunAtUtc]
+      );
 
       const runId = generateId();
       await client.query(
@@ -416,9 +430,13 @@ export class PostgresDurableJobStore implements DurableJobStore {
 
       await client.query("commit");
       return true;
-    } catch {
+    } catch (error) {
       await client.query("rollback");
-      return false;
+      const code = (error as { code?: string }).code;
+      if (code === "23505" || code === "40001" || code === "40P01") {
+        return false;
+      }
+      throw error;
     } finally {
       client.release();
     }
