@@ -10,3 +10,6 @@ export * from "./postgres/table-names.js";
 export * from "./postgres/migrator.js";
 export * from "./postgres/store.js";
 export * from "./postgres/runtime.js";
+export * from "./observability/http.js";
+export * from "./observability/ingestion.js";
+export * from "./observability/runtime-control.js";
