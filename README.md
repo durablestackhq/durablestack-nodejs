@@ -19,8 +19,18 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - event emission model with core event types
 - Deferred to later phases:
   - job auto-discovery
-  - SQL providers (Postgres/MySQL/SQL Server/SQLite)
+  - MySQL/SQL Server/SQLite providers
   - hosted ingestion transport and runtime-control sync workers
+
+## Phase 2 (in progress)
+
+- PostgreSQL provider scaffold has been added with:
+  - table naming resolver,
+  - baseline migration,
+  - Postgres `DurableJobStore` implementation,
+  - initial env-gated Postgres integration tests.
+
+Use env var `DURABLESTACK_TEST_POSTGRES` to enable Postgres integration tests locally/CI.
 
 ## Quick start
 
