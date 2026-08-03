@@ -12,15 +12,23 @@ function isSameSlot(a: string | undefined, b: string): boolean {
   return Math.abs(Date.parse(a) - Date.parse(b)) <= 1;
 }
 
-async function createIsolatedStore(prefixBase: string): Promise<MySqlDurableJobStore> {
+async function createIsolatedStore(prefixBase: string): Promise<{ store: MySqlDurableJobStore; prefix: string }> {
   if (!connectionString) {
     throw new Error("DURABLESTACK_TEST_MYSQL is not set");
   }
 
-  const prefix = `${prefixBase}_${Date.now()}_${Math.floor(Math.random() * 10000)}_`;
+  const shortBase = prefixBase.slice(0, 8);
+  const stamp = Date.now().toString(36);
+  const nonce = Math.floor(Math.random() * (36 * 36)).toString(36).padStart(2, "0");
+  const prefix = `${shortBase}_${stamp}_${nonce}_`;
   const store = new MySqlDurableJobStore({ connectionString, databaseTablePrefix: prefix });
-  await migrateMySql(store.getPool(), prefix);
-  return store;
+  try {
+    await migrateMySql(store.getPool(), prefix);
+    return { store, prefix };
+  } catch (error) {
+    await store.close();
+    throw error;
+  }
 }
 
 test("mysql lease fencing blocks stale completion write (env-gated)", async (t) => {
@@ -29,7 +37,7 @@ test("mysql lease fencing blocks stale completion write (env-gated)", async (t) 
     return;
   }
 
-  const store = await createIsolatedStore("it_mysql_fence");
+  const { store } = await createIsolatedStore("it_mysql_fence");
   try {
     const runId = await store.enqueue("job-a", "job-a", undefined, new Date().toISOString(), 3);
     const claimed = await store.claimDueRuns("worker-a", 1, 30);
@@ -51,7 +59,7 @@ test("mysql expired lease can be reclaimed by another worker (env-gated)", async
     return;
   }
 
-  const store = await createIsolatedStore("it_mysql_reclaim");
+  const { store } = await createIsolatedStore("it_mysql_reclaim");
   try {
     const runId = await store.enqueue("job-a", "job-a", undefined, new Date().toISOString(), 3);
     const first = await store.claimDueRuns("worker-a", 1, 1);
@@ -76,7 +84,7 @@ test("mysql enqueue-if-no-active-run deduplicates pending/leased and allows afte
     return;
   }
 
-  const store = await createIsolatedStore("it_mysql_noactive");
+  const { store } = await createIsolatedStore("it_mysql_noactive");
   try {
     const first = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
     assert.ok(first);
@@ -106,7 +114,7 @@ test("mysql recurring slot materialization is single-winner under race (env-gate
     return;
   }
 
-  const store = await createIsolatedStore("it_mysql_slot");
+  const { store } = await createIsolatedStore("it_mysql_slot");
   try {
     const registration = {
       jobName: "recurring-a",
@@ -172,7 +180,7 @@ test("mysql runtime command lease is single-winner under contention (env-gated)"
     return;
   }
 
-  const store = await createIsolatedStore("it_mysql_cmdlease");
+  const { store } = await createIsolatedStore("it_mysql_cmdlease");
   try {
     const [a, b] = await Promise.all([
       store.tryLeaseRuntimeCommandReceipt("cmd-1", "worker-a", 30),
@@ -181,6 +189,22 @@ test("mysql runtime command lease is single-winner under contention (env-gated)"
 
     const successCount = [a, b].filter(Boolean).length;
     assert.equal(successCount, 1);
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql schema migration is idempotent under repeated execution (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store, prefix } = await createIsolatedStore("it_mysql_migid");
+  try {
+    await migrateMySql(store.getPool(), prefix);
+    await migrateMySql(store.getPool(), prefix);
+    assert.ok(true);
   } finally {
     await store.close();
   }

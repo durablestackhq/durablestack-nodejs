@@ -26,7 +26,7 @@ test("mysql migration creates baseline tables (env-gated)", async (t) => {
     return;
   }
 
-  const prefix = `it_mysql_${Date.now()}_`;
+  const prefix = `itmy_${Date.now().toString(36)}_`;
   const pool = createMySqlPool(connectionString);
   try {
     await migrateMySql(pool, prefix);
