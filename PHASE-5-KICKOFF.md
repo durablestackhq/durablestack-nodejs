@@ -36,6 +36,10 @@ In progress.
      - recurring slot race single-winner behavior,
      - runtime-command lease single-winner contention.
 
+8. CI readiness for MySQL tests
+   - Added dedicated MySQL service job in GitHub Actions.
+   - Added failure artifact/log capture for MySQL env-gated test runs.
+
 6. P0 parity course-corrections applied
    - processor now applies recurring registration sync semantics for existing jobs/orphans,
    - processor now aborts local job execution when lease extension fails,

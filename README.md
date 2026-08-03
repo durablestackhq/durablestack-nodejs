@@ -25,8 +25,10 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
 
 - Provider parity kickoff started with MySQL-first scaffolding:
   - MySQL options/table naming/migrator/runtime/store scaffold,
-  - env-gated migration test coverage,
+  - env-gated MySQL migration/contract test coverage,
   - exported MySQL provider entry points.
+
+Use env var `DURABLESTACK_TEST_MYSQL` to enable MySQL integration/contract tests locally/CI.
 
 Phase 5 kickoff details are documented in `PHASE-5-KICKOFF.md`.
 

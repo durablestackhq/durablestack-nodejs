@@ -90,3 +90,59 @@ jobs:
       - name: Fail job if Postgres tests failed
         if: ${{ steps.postgres_tests.outcome != 'success' }}
         run: exit 1
+
+  mysql-contract-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: durablestack_ci
+          MYSQL_DATABASE: durable_stack
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdurablestack_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (MySQL enabled)
+        id: mysql_tests
+        continue-on-error: true
+        env:
+          DURABLESTACK_TEST_MYSQL: "mysql://root:durablestack_ci@127.0.0.1:3306/durable_stack"
+        run: set -o pipefail && npm test 2>&1 | tee mysql-test-output.log
+
+      - name: Upload MySQL test output artifact (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-test-output
+          path: mysql-test-output.log
+          if-no-files-found: ignore
+
+      - name: Show MySQL test log tail (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        run: tail -n 200 mysql-test-output.log || true
+
+      - name: Fail job if MySQL tests failed
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        run: exit 1
