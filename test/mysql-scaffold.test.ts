@@ -26,7 +26,7 @@ test("mysql migration creates baseline tables (env-gated)", async (t) => {
     return;
   }
 
-  const prefix = `itmy_${Date.now().toString(36)}_`;
+  const prefix = `itmy_${Date.now().toString(36)}_${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}_`;
   const pool = createMySqlPool(connectionString);
   try {
     await migrateMySql(pool, prefix);
@@ -34,12 +34,17 @@ test("mysql migration creates baseline tables (env-gated)", async (t) => {
 
     const [rows] = await pool.query(
       `
-        select table_name
+        select lower(table_name) as table_name
         from information_schema.tables
         where table_schema = database()
-          and table_name in (?, ?, ?, ?)
+          and lower(table_name) in (?, ?, ?, ?)
       `,
-      [tables.jobs, tables.runs, tables.migrations, tables.runtimeCommandReceipts]
+      [
+        tables.jobs.toLowerCase(),
+        tables.runs.toLowerCase(),
+        tables.migrations.toLowerCase(),
+        tables.runtimeCommandReceipts.toLowerCase()
+      ]
     );
 
     const names = (rows as Array<{ table_name: string }>).map((x) => x.table_name);
