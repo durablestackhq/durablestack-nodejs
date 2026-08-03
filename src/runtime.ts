@@ -3,6 +3,7 @@ import { getNextOccurrenceUtc, validateIanaTimeZone } from "./cron.js";
 import { NoOpDurableStackEventSink } from "./event-sink.js";
 import { InMemoryDurableJobStore } from "./in-memory-store.js";
 import { normalizeOptions } from "./options.js";
+import { loadAutodiscoveredJobs } from "./autodiscovery.js";
 import { createIngestionEventing, type IngestionEventSyncService } from "./observability/ingestion.js";
 import { RuntimeControlSyncService, type RuntimeControlAdmin } from "./observability/runtime-control.js";
 import { DurableStackProcessor } from "./processor.js";
@@ -72,6 +73,7 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
   private readonly runtimeControlSyncService: RuntimeControlSyncService | undefined;
   private readonly managedServices: ManagedBackgroundService[];
   private running = false;
+  private autodiscoveryLoaded = false;
   private loopPromise: Promise<void> | undefined;
   private abortController: AbortController | undefined;
 
@@ -233,6 +235,8 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
       return;
     }
 
+    await this.loadAutodiscoveredJobsIfEnabled();
+
     this.running = true;
     this.abortController = new AbortController();
     await this.processor.initializeRecurringJobs();
@@ -255,6 +259,43 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
         await sleep(delaySeconds * 1000);
       }
     })();
+  }
+
+  private async loadAutodiscoveredJobsIfEnabled(): Promise<void> {
+    if (this.autodiscoveryLoaded || !this.options.autodiscovery.enabled) {
+      return;
+    }
+
+    this.autodiscoveryLoaded = true;
+    if (this.options.autodiscovery.includeGlobs.length === 0) {
+      return;
+    }
+
+    try {
+      const discovered = await loadAutodiscoveredJobs({
+        baseDir: this.options.autodiscovery.baseDir,
+        includeGlobs: this.options.autodiscovery.includeGlobs,
+        excludeGlobs: this.options.autodiscovery.excludeGlobs,
+        exportName: this.options.autodiscovery.exportName,
+        maxModules: this.options.autodiscovery.maxModules,
+        failOnError: this.options.autodiscovery.failOnError
+      });
+
+      for (const definition of discovered) {
+        this.registry.register({
+          jobName: definition.jobName,
+          jobType: definition.jobType ?? definition.jobName,
+          maxAttempts: Math.max(1, Math.floor(definition.maxAttempts ?? 3)),
+          handler: definition.handler,
+          recurring: definition.recurring
+        });
+      }
+    } catch (error) {
+      if (this.options.autodiscovery.failOnError) {
+        const message = error instanceof Error ? error.message : "Autodiscovery failed.";
+        throw new Error(`Autodiscovery failed: ${message}`);
+      }
+    }
   }
 
   public async stop(): Promise<void> {

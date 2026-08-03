@@ -31,6 +31,29 @@
 - CI coverage:
   - dedicated Postgres-enabled CI job executes Postgres tests with a service container.
 
+## Phase 3 Delivered Here
+
+- Hosted observability/runtime-control foundation:
+  - ingestion event sink queue + sync service,
+  - runtime-control sync service and command processor,
+  - runtime lifecycle auto-wiring for hosted sync services.
+- Transport hardening semantics:
+  - bounded retries for transient HTTP failures,
+  - no-retry behavior for unauthorized responses.
+- Coverage:
+  - observability/runtime-control tests for payload shape, command flow, retry behavior, and receipt lifecycle progression.
+
+## Phase 4 Delivered Here
+
+- Opt-in autodiscovery for job registration:
+  - runtime options for include/exclude globs, fail mode, module cap, base dir, and export name,
+  - deterministic module discovery and strict export validation,
+  - startup integration before recurring initialization and worker loop start.
+- Safety and behavior:
+  - duplicate-name fail-fast behavior,
+  - strict fail-on-error and best-effort continue-on-error loading modes,
+  - recurring autodiscovery behavior covered by runtime tests.
+
 ## Design Notes
 
 - Job registration is explicit (`registerJob`) for initial implementation.
@@ -40,7 +63,5 @@
 
 ## Deferred From Initial Build
 
-- Module/assembly-style job auto-discovery.
 - Durable SQL providers beyond Postgres (MySQL/SQL Server/SQLite).
-- Hosted ingestion transport and runtime-control sync worker.
 - Framework adapters and convenience bundle package.

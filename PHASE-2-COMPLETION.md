@@ -45,6 +45,12 @@ Phase 2 is complete.
 - Runtime command lease contention behavior covered by tests: complete.
 - Postgres-enabled CI coverage active and passing: complete.
 
+## Post-Completion Stability Note
+
+- The recurring slot race contract test was hardened after intermittent CI failures caused by contention and timestamp precision differences.
+- The contract assertion now emphasizes the canonical invariant (no duplicate runs for the same schedule slot) and uses a non-racy follow-up path when both initial racers lose under transient contention.
+- This keeps the test aligned with provider-agnostic behavior expectations while avoiding false negatives from timing/format artifacts.
+
 ## Explicitly Deferred Beyond Phase 2
 
 - Job auto-discovery.

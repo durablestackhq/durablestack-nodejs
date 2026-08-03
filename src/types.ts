@@ -216,6 +216,16 @@ export interface DurableStackEventingOptions {
   runtimeControlCommandLeaseDurationSeconds?: number;
 }
 
+export interface DurableStackAutodiscoveryOptions {
+  enabled?: boolean;
+  includeGlobs?: string[];
+  excludeGlobs?: string[];
+  failOnError?: boolean;
+  maxModules?: number;
+  baseDir?: string;
+  exportName?: string;
+}
+
 export interface DurableStackOptions {
   workerName?: string;
   databaseTablePrefix?: string;
@@ -233,6 +243,7 @@ export interface DurableStackOptions {
   recurring?: DurableStackRecurringOptions;
   retention?: DurableStackRetentionOptions;
   eventing?: DurableStackEventingOptions;
+  autodiscovery?: DurableStackAutodiscoveryOptions;
 }
 
 export interface NormalizedDurableStackOptions {
@@ -263,6 +274,15 @@ export interface NormalizedDurableStackOptions {
     deleteBatchSize: number;
   };
   eventing: Required<DurableStackEventingOptions>;
+  autodiscovery: {
+    enabled: boolean;
+    includeGlobs: string[];
+    excludeGlobs: string[];
+    failOnError: boolean;
+    maxModules: number;
+    baseDir: string;
+    exportName: string;
+  };
 }
 
 export interface DurableJobStore {

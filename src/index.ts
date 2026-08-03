@@ -5,6 +5,7 @@ export * from "./event-sink.js";
 export * from "./runtime.js";
 export * from "./in-memory-store.js";
 export * from "./options.js";
+export * from "./autodiscovery.js";
 export * from "./postgres/types.js";
 export * from "./postgres/table-names.js";
 export * from "./postgres/migrator.js";

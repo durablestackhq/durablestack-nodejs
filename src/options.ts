@@ -1,5 +1,21 @@
-import type { DurableStackEventingOptions, DurableStackOptions, NormalizedDurableStackOptions } from "./types.js";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+import type {
+  DurableStackAutodiscoveryOptions,
+  DurableStackEventingOptions,
+  DurableStackOptions,
+  NormalizedDurableStackOptions
+} from "./types.js";
 import { ensurePositive, normalizePrefix } from "./utils.js";
+
+const DEFAULT_AUTODISCOVERY: Required<Omit<DurableStackAutodiscoveryOptions, "baseDir">> = {
+  enabled: false,
+  includeGlobs: [],
+  excludeGlobs: ["**/node_modules/**", "**/dist/**", "**/*.d.ts"],
+  failOnError: true,
+  maxModules: 500,
+  exportName: "durableStackJobs"
+};
 
 const DEFAULT_EVENTING: Required<DurableStackEventingOptions> = {
   tenantId: "",
@@ -31,6 +47,18 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
     ...(input?.eventing ?? {})
   };
 
+  const defaultBaseDir = dirname(fileURLToPath(new URL("../", import.meta.url)));
+  const autodiscoveryInput = input?.autodiscovery;
+  const autodiscovery = {
+    ...DEFAULT_AUTODISCOVERY,
+    ...(autodiscoveryInput ?? {}),
+    includeGlobs: (autodiscoveryInput?.includeGlobs ?? []).map((x) => x.trim()).filter((x) => x.length > 0),
+    excludeGlobs: (autodiscoveryInput?.excludeGlobs ?? DEFAULT_AUTODISCOVERY.excludeGlobs).map((x) => x.trim()).filter((x) => x.length > 0),
+    maxModules: Math.max(1, Math.floor(ensurePositive(autodiscoveryInput?.maxModules, DEFAULT_AUTODISCOVERY.maxModules))),
+    exportName: (autodiscoveryInput?.exportName?.trim() || DEFAULT_AUTODISCOVERY.exportName),
+    baseDir: (autodiscoveryInput?.baseDir?.trim() || defaultBaseDir)
+  };
+
   return {
     workerName: (input?.workerName?.trim() || createDefaultWorkerName()),
     databaseTablePrefix: normalizePrefix(input?.databaseTablePrefix),
@@ -58,7 +86,8 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
       sweepIntervalSeconds: ensurePositive(input?.retention?.sweepIntervalSeconds, 300),
       deleteBatchSize: Math.max(1, Math.floor(ensurePositive(input?.retention?.deleteBatchSize, 1000)))
     },
-    eventing
+    eventing,
+    autodiscovery
   };
 }
 
