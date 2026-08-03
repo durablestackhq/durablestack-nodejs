@@ -1,4 +1,4 @@
-# DurableStack Node.js Architecture (Phase 0-1)
+# DurableStack Node.js Architecture
 
 ## Goals
 
@@ -19,6 +19,18 @@
 - Runtime processor loop that claims due runs, executes handlers, applies retry behavior, and emits events.
 - Runtime host with `start`/`stop` and API surfaces for client/admin/query.
 
+## Phase 2 Delivered Here
+
+- PostgreSQL provider structure and contracts:
+  - table naming resolver with prefix handling,
+  - baseline migration for jobs/runs/migrations/runtime-command receipts,
+  - Postgres `DurableJobStore` implementation covering run, recurring, retention, and runtime-command receipt APIs.
+- Postgres-focused validation:
+  - integration tests for migration + enqueue/claim/succeed flow,
+  - contract tests for lease fencing, lease reclaim, recurring slot race single-winner behavior, and runtime-command lease contention.
+- CI coverage:
+  - dedicated Postgres-enabled CI job executes Postgres tests with a service container.
+
 ## Design Notes
 
 - Job registration is explicit (`registerJob`) for initial implementation.
@@ -29,6 +41,6 @@
 ## Deferred From Initial Build
 
 - Module/assembly-style job auto-discovery.
-- Durable SQL providers (Postgres/MySQL/SQL Server/SQLite) and migration locking.
+- Durable SQL providers beyond Postgres (MySQL/SQL Server/SQLite).
 - Hosted ingestion transport and runtime-control sync worker.
 - Framework adapters and convenience bundle package.

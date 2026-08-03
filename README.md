@@ -1,4 +1,4 @@
-# DurableStack Node.js (Phase 0-1)
+# DurableStack Node.js
 
 This repository currently contains the Phase 0 and Phase 1 foundation for the DurableStack Node.js runtime:
 
@@ -20,17 +20,29 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
 - Deferred to later phases:
   - job auto-discovery
   - MySQL/SQL Server/SQLite providers
-  - hosted ingestion transport and runtime-control sync workers
+  - framework adapters and convenience bundle package
 
-## Phase 2 (in progress)
+## Phase 3 (in progress)
 
-- PostgreSQL provider scaffold has been added with:
+- Hosted observability scaffolding added:
+  - ingestion event sink queue and sync service,
+  - runtime-control sync service and command processor,
+  - tests for ingestion headers/payloads and runtime-control command flow.
+- Runtime hardening added:
+  - hosted ingestion sync and runtime-control sync now auto-start/stop with runtime lifecycle when tenant credentials are configured.
+
+## Phase 2 (completed)
+
+- PostgreSQL provider foundation has been added with:
   - table naming resolver,
-  - baseline migration,
+  - baseline idempotent migration,
   - Postgres `DurableJobStore` implementation,
-  - initial env-gated Postgres integration tests.
+  - Postgres contract/integration tests (env-gated locally),
+  - CI Postgres service job that executes Postgres tests automatically.
 
 Use env var `DURABLESTACK_TEST_POSTGRES` to enable Postgres integration tests locally/CI.
+
+Phase 2 completion details are documented in `PHASE-2-COMPLETION.md`.
 
 ## Quick start
 

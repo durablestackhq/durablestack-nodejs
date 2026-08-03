@@ -3,6 +3,8 @@ import { getNextOccurrenceUtc, validateIanaTimeZone } from "./cron.js";
 import { NoOpDurableStackEventSink } from "./event-sink.js";
 import { InMemoryDurableJobStore } from "./in-memory-store.js";
 import { normalizeOptions } from "./options.js";
+import { createIngestionEventing, type IngestionEventSyncService } from "./observability/ingestion.js";
+import { RuntimeControlSyncService, type RuntimeControlAdmin } from "./observability/runtime-control.js";
 import { DurableStackProcessor } from "./processor.js";
 import { DurableJobRegistry } from "./registry.js";
 import type {
@@ -55,12 +57,20 @@ export interface DurableStackRuntime {
   stop(): Promise<void>;
 }
 
+interface ManagedBackgroundService {
+  start(): void;
+  stop(): Promise<void>;
+}
+
 type RunStatusString = "pending" | "leased" | "succeeded" | "failed";
 
 class DurableStackRuntimeImpl implements DurableStackRuntime {
   private readonly registry = new DurableJobRegistry();
   private readonly processor: DurableStackProcessor;
   private readonly sinks: DurableStackEventSink[];
+  private readonly ingestionSyncService: IngestionEventSyncService | undefined;
+  private readonly runtimeControlSyncService: RuntimeControlSyncService | undefined;
+  private readonly managedServices: ManagedBackgroundService[];
   private running = false;
   private loopPromise: Promise<void> | undefined;
   private abortController: AbortController | undefined;
@@ -70,7 +80,40 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
     private readonly options: ReturnType<typeof normalizeOptions>,
     sinks: DurableStackEventSink[]
   ) {
-    this.sinks = sinks.length > 0 ? sinks : [new NoOpDurableStackEventSink()];
+    const configuredSinks = sinks.length > 0 ? [...sinks] : [];
+
+    const hasHostedCredentials =
+      Boolean(this.options.eventing.tenantId && this.options.eventing.tenantId.trim())
+      && Boolean(this.options.eventing.clientSecret && this.options.eventing.clientSecret.trim());
+
+    if (hasHostedCredentials) {
+      const ingestion = createIngestionEventing(this.options);
+      configuredSinks.push(ingestion.sink);
+      this.ingestionSyncService = ingestion.service;
+
+      const admin: RuntimeControlAdmin = {
+        listScheduledJobs: (includeDisabled) => this.listScheduledJobs(includeDisabled),
+        setScheduledJobEnabled: (jobName, enabled) => this.setScheduledJobEnabled(jobName, enabled),
+        updateScheduledJobCron: (jobName, cronExpression, timeZone) => this.updateScheduledJobCron(jobName, cronExpression, timeZone),
+        runScheduledJobNow: (jobName) => this.runScheduledJobNow(jobName)
+      };
+
+      this.runtimeControlSyncService = new RuntimeControlSyncService(
+        this.store,
+        admin,
+        this.options
+      );
+    }
+
+    this.managedServices = [];
+    if (this.runtimeControlSyncService) {
+      this.managedServices.push(this.runtimeControlSyncService);
+    }
+    if (this.ingestionSyncService) {
+      this.managedServices.push(this.ingestionSyncService);
+    }
+
+    this.sinks = configuredSinks.length > 0 ? configuredSinks : [new NoOpDurableStackEventSink()];
     this.processor = new DurableStackProcessor(store, this.registry, options, this.sinks);
   }
 
@@ -194,6 +237,10 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
     this.abortController = new AbortController();
     await this.processor.initializeRecurringJobs();
 
+    for (const service of this.managedServices) {
+      service.start();
+    }
+
     this.loopPromise = (async () => {
       while (this.running && this.abortController && !this.abortController.signal.aborted) {
         await this.processor.processOnce(this.abortController.signal);
@@ -222,6 +269,10 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
 
     if (this.loopPromise) {
       await this.loopPromise;
+    }
+
+    for (const service of this.managedServices) {
+      await service.stop();
     }
 
     await this.processor.drainInFlightRuns(this.options.shutdownDrainTimeoutSeconds);
