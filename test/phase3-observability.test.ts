@@ -482,6 +482,54 @@ test("runtime control sync uploads existing receipts before processing new comma
   assert.equal(pendingUploadAfterSync[0]?.status, "succeeded");
 });
 
+test("runtime control sync does not upload leased-only receipts", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const leased = await store.tryLeaseRuntimeCommandReceipt("cmd-leased", "worker-a", 30);
+  assert.equal(leased, true);
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: async () => [],
+    setScheduledJobEnabled: async () => true,
+    updateScheduledJobCron: async () => true,
+    runScheduledJobNow: async () => "run-1"
+  };
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync",
+      runtimeControlSyncIntervalSeconds: 5,
+      runtimeControlCommandLeaseDurationSeconds: 30,
+      runtimeControlMaxReceiptUpload: 200
+    }
+  });
+
+  const service = new RuntimeControlSyncService(
+    store,
+    admin,
+    options,
+    async () => ({
+      status: 200,
+      bodyText: JSON.stringify({
+        serverTimeUtc: new Date().toISOString(),
+        commands: []
+      })
+    })
+  );
+
+  await service.syncOnce(new AbortController().signal);
+
+  const uploadedVisible = await store.getRuntimeCommandReceipts(10);
+  assert.equal(uploadedVisible.length, 0);
+
+  const leaseCanBeRetaken = await store.tryLeaseRuntimeCommandReceipt("cmd-leased", "worker-b", 30);
+  assert.equal(leaseCanBeRetaken, false);
+});
+
 test("runtime start auto-wires hosted sinks/services when credentials are configured", async () => {
   const store = new InMemoryDurableJobStore();
 

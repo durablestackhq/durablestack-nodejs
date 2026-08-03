@@ -555,10 +555,16 @@ export class PostgresDurableJobStore implements DurableJobStore {
       select *
       from ${q(this.tables.runtimeCommandReceipts)}
       where uploaded_at_utc is null
+        and status in ($2, $3, $4)
       order by recorded_at_utc asc
       limit $1;
     `;
-    const result = await this.pool.query(sql, [Math.max(1, Math.floor(take))]);
+    const result = await this.pool.query(sql, [
+      Math.max(1, Math.floor(take)),
+      RUNTIME_COMMAND_RECEIPT_STATUS.ACKNOWLEDGED,
+      RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED,
+      RUNTIME_COMMAND_RECEIPT_STATUS.FAILED
+    ]);
     return result.rows.map((row) => rowToReceipt(row));
   }
 

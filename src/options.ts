@@ -92,5 +92,5 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
 }
 
 export function getEffectiveRunRetentionSeconds(options: NormalizedDurableStackOptions): number {
-  return options.retention.runRetentionSeconds ?? 3600;
+  return options.retention.runRetentionSeconds ?? 86_400;
 }

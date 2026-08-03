@@ -35,6 +35,11 @@ Phase 4 is complete for runtime discovery mode.
 - Error handling honors strict/best-effort modes: complete.
 - Test coverage includes reliability/safety scenarios: complete.
 
+## CI Validation
+
+- Full CI pass confirmed, including Postgres-enabled env-gated test execution.
+- Postgres and runtime/autodiscovery suites passed with no failures.
+
 ## Explicitly Deferred
 
 - Build-time discovery manifest mode (optional optimization for very large codebases).

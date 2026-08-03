@@ -54,6 +54,13 @@
   - strict fail-on-error and best-effort continue-on-error loading modes,
   - recurring autodiscovery behavior covered by runtime tests.
 
+## Phase 5 In Progress
+
+- Provider parity kickoff with MySQL-first scaffolding:
+  - MySQL options/table naming/migrator/runtime/store scaffold,
+  - initial MySQL env-gated migration test,
+  - MySQL provider module exports wired in public entrypoint.
+
 ## Design Notes
 
 - Job registration is explicit (`registerJob`) for initial implementation.
@@ -63,5 +70,5 @@
 
 ## Deferred From Initial Build
 
-- Durable SQL providers beyond Postgres (MySQL/SQL Server/SQLite).
+- Durable SQL providers beyond Postgres (SQL Server/SQLite) after MySQL completion.
 - Framework adapters and convenience bundle package.

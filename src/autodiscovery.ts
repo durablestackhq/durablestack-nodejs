@@ -8,6 +8,8 @@ export interface DiscoveredJobDefinition {
   jobName: string;
   jobType?: string;
   maxAttempts?: number;
+  retryBehavior?: RetryBehavior;
+  retryInitialDelaySeconds?: number;
   recurring?: {
     cronExpression: string;
     timeZone: string;

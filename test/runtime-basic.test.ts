@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDurableStack } from "../src/runtime.js";
+import { createDurableStack, createDurableStackWithStore } from "../src/runtime.js";
+import { InMemoryDurableJobStore } from "../src/in-memory-store.js";
+import { DurableStackProcessor } from "../src/processor.js";
+import { DurableJobRegistry } from "../src/registry.js";
+import { normalizeOptions } from "../src/options.js";
 
 const fixturesDir = join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "autodiscovery");
 
@@ -239,4 +243,159 @@ test("autodiscovery maxModules guard fails startup", async () => {
   });
 
   await assert.rejects(async () => runtime.start(), /exceeds maxModules/);
+});
+
+test("processor initializes recurring with KeepDatabase and disables orphans by default", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  await store.upsertRecurringJob({
+    jobName: "shared",
+    jobType: "shared",
+    maxAttempts: 3,
+    recurring: {
+      cronExpression: "*/1 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    },
+    handler: async () => {}
+  }, new Date(Date.now() + 60_000).toISOString());
+
+  await store.upsertRecurringJob({
+    jobName: "orphan",
+    jobType: "orphan",
+    maxAttempts: 3,
+    recurring: {
+      cronExpression: "*/1 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    },
+    handler: async () => {}
+  }, new Date(Date.now() + 60_000).toISOString());
+
+  const existingBefore = (await store.getRecurringJobs(true)).find((x) => x.jobName === "shared");
+  const existingNext = existingBefore?.nextRunAtUtc;
+  assert.ok(existingNext);
+
+  const registry = new DurableJobRegistry();
+  registry.register({
+    jobName: "shared",
+    jobType: "shared",
+    maxAttempts: 3,
+    recurring: {
+      cronExpression: "*/5 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    },
+    handler: async () => {}
+  });
+
+  const options = normalizeOptions({
+    recurring: {
+      registrationSync: {
+        existingJobBehavior: "KeepDatabase",
+        orphanedJobBehavior: "Disable"
+      }
+    }
+  });
+
+  const processor = new DurableStackProcessor(store, registry, options, []);
+  await processor.initializeRecurringJobs();
+
+  const sharedAfter = (await store.getRecurringJobs(true)).find((x) => x.jobName === "shared");
+  assert.equal(sharedAfter?.nextRunAtUtc, existingNext);
+
+  const orphanAfter = (await store.getRecurringJobs(true)).find((x) => x.jobName === "orphan");
+  assert.equal(orphanAfter?.enabled, false);
+});
+
+test("processor initialize recurring UpdateFromCode updates existing schedule", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  await store.upsertRecurringJob({
+    jobName: "shared",
+    jobType: "shared",
+    maxAttempts: 3,
+    recurring: {
+      cronExpression: "*/1 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    },
+    handler: async () => {}
+  }, new Date(Date.now() + 60_000).toISOString());
+
+  const registry = new DurableJobRegistry();
+  registry.register({
+    jobName: "shared",
+    jobType: "shared",
+    maxAttempts: 3,
+    recurring: {
+      cronExpression: "*/5 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    },
+    handler: async () => {}
+  });
+
+  const options = normalizeOptions({
+    recurring: {
+      registrationSync: {
+        existingJobBehavior: "UpdateFromCode",
+        orphanedJobBehavior: "Ignore"
+      }
+    }
+  });
+
+  const processor = new DurableStackProcessor(store, registry, options, []);
+  await processor.initializeRecurringJobs();
+
+  const sharedAfter = (await store.getRecurringJobs(true)).find((x) => x.jobName === "shared");
+  assert.equal(sharedAfter?.cronExpression, "*/5 * * * *");
+});
+
+test("runtime cancels handler when lease extension fails", async () => {
+  class LeaseLosingStore extends InMemoryDurableJobStore {
+    private extendCalls = 0;
+
+    override async extendLease(runId: string, workerName: string, leaseDurationSeconds: number): Promise<boolean> {
+      this.extendCalls += 1;
+      if (this.extendCalls >= 2) {
+        return false;
+      }
+      return super.extendLease(runId, workerName, leaseDurationSeconds);
+    }
+  }
+
+  const store = new LeaseLosingStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 1,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 2
+  });
+
+  let abortSeen = false;
+  runtime.registerJob("slow", async (_payload, _ctx, signal) => {
+    while (!signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    abortSeen = true;
+    throw new Error("lease_lost_abort");
+  });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("slow");
+
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+  const run = await runtime.getRun(runId);
+  await runtime.stop();
+
+  assert.equal(abortSeen, true);
+  assert.ok(run);
+  assert.notEqual(run?.status, "succeeded");
 });

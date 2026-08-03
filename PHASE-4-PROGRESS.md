@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress.
+Completed.
 
 ## Completed So Far
 
@@ -30,13 +30,8 @@ In progress.
    - continue-on-error behavior with mixed valid/invalid modules,
    - `maxModules` startup guard.
 
-## Remaining For Phase 4 Completion
+## Completion Notes
 
-1. Add focused docs guidance for production-safe patterns
-   - narrow include globs,
-   - recommended exclude patterns,
-   - deterministic naming conventions.
-
-2. Add CI confirmation pass and monitor Postgres env-gated stability with new test load.
-
-3. Decide whether build-time manifest mode is required for this phase or explicitly deferred.
+1. CI confirmation pass completed with full green test run.
+2. Build-time manifest mode was explicitly deferred.
+3. Runtime discovery mode acceptance criteria are fully satisfied.

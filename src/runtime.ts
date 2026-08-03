@@ -21,6 +21,8 @@ import { nowIso, randomJittered, safeJsonStringify, sleep } from "./utils.js";
 
 export interface RegisterJobOptions {
   maxAttempts?: number;
+  retryBehavior?: RetryBehavior;
+  retryInitialDelaySeconds?: number;
 }
 
 export interface RegisterRecurringOptions {
@@ -124,6 +126,8 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
       jobName,
       jobType: jobName,
       maxAttempts: Math.max(1, Math.floor(options?.maxAttempts ?? 3)),
+      retryBehavior: options?.retryBehavior,
+      retryInitialDelaySeconds: options?.retryInitialDelaySeconds,
       handler
     });
     return this;
@@ -286,6 +290,8 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
           jobName: definition.jobName,
           jobType: definition.jobType ?? definition.jobName,
           maxAttempts: Math.max(1, Math.floor(definition.maxAttempts ?? 3)),
+          retryBehavior: definition.retryBehavior,
+          retryInitialDelaySeconds: definition.retryInitialDelaySeconds,
           handler: definition.handler,
           recurring: definition.recurring
         });

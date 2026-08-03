@@ -18,8 +18,17 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - lease heartbeat extension and completion fencing
   - event emission model with core event types
 - Deferred to later phases:
-  - MySQL/SQL Server/SQLite providers
+  - SQL Server/SQLite providers
   - framework adapters and convenience bundle package
+
+## Phase 5 (in progress)
+
+- Provider parity kickoff started with MySQL-first scaffolding:
+  - MySQL options/table naming/migrator/runtime/store scaffold,
+  - env-gated migration test coverage,
+  - exported MySQL provider entry points.
+
+Phase 5 kickoff details are documented in `PHASE-5-KICKOFF.md`.
 
 ## Phase 4 (completed)
 
