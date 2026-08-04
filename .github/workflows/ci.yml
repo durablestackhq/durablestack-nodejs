@@ -93,6 +93,7 @@ jobs:
 
   mysql-contract-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       mysql:
@@ -131,12 +132,20 @@ jobs:
           DURABLESTACK_TEST_MYSQL: "mysql://root:durablestack_ci@127.0.0.1:3306/durable_stack"
         run: set -o pipefail && npm test 2>&1 | tee mysql-test-output.log
 
+      - name: Dump migration lock state (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        env:
+          MYSQL_PWD: durablestack_ci
+        run: mysql -h 127.0.0.1 -uroot -D durable_stack -e "select is_used_lock('durablestack_migrate_default') as default_lock; show processlist;" > mysql-lock-diagnostics.log || true
+
       - name: Upload MySQL test output artifact (on failure)
         if: ${{ steps.mysql_tests.outcome != 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: mysql-test-output
-          path: mysql-test-output.log
+          path: |
+            mysql-test-output.log
+            mysql-lock-diagnostics.log
           if-no-files-found: ignore
 
       - name: Show MySQL test log tail (on failure)

@@ -209,3 +209,71 @@ test("mysql schema migration is idempotent under repeated execution (env-gated)"
     await store.close();
   }
 });
+
+test("mysql recurring race fallback eventually creates a run under contention (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_slotfb");
+  try {
+    const registration = {
+      jobName: "recurring-fallback",
+      jobType: "recurring-fallback",
+      maxAttempts: 3,
+      handler: async () => {},
+      recurring: {
+        cronExpression: "*/1 * * * *",
+        timeZone: "UTC",
+        enabled: true,
+        allowConcurrentRuns: true
+      }
+    };
+
+    const slot = new Date().toISOString();
+    await store.upsertRecurringJob(registration, slot);
+    const [state] = await store.getRecurringJobs(true);
+    assert.ok(state);
+
+    const created = await store.tryMaterializeRecurringRun(state, registration, new Date(Date.now() + 60_000).toISOString());
+    if (!created) {
+      for (let i = 0; i < 5; i += 1) {
+        const [latest] = await store.getRecurringJobs(true);
+        assert.ok(latest);
+        const next = new Date(Date.parse(latest.nextRunAtUtc) + 60_000).toISOString();
+        const result = await store.tryMaterializeRecurringRun(latest, registration, next);
+        if (result) {
+          break;
+        }
+      }
+    }
+
+    const runs = await store.getRunsByJobName("recurring-fallback", 20);
+    assert.ok(runs.length >= 1);
+    const distinctSlots = new Set(runs.map((x) => x.scheduleSlotUtc ?? "none"));
+    assert.equal(distinctSlots.size, runs.length);
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql runtime command lease re-acquisition works after expiry (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_cmdexp");
+  try {
+    const first = await store.tryLeaseRuntimeCommandReceipt("cmd-expire", "worker-a", 1);
+    assert.equal(first, true);
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    const second = await store.tryLeaseRuntimeCommandReceipt("cmd-expire", "worker-b", 30);
+    assert.equal(second, true);
+  } finally {
+    await store.close();
+  }
+});

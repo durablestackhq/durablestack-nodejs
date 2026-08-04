@@ -40,6 +40,12 @@ In progress.
    - Added dedicated MySQL service job in GitHub Actions.
    - Added failure artifact/log capture for MySQL env-gated test runs.
 
+9. MySQL parity-hardening test expansion
+   - Added MySQL integration tests for migration baseline and enqueue/claim/succeed flow.
+   - Added MySQL migration concurrency test for same-prefix parallel calls.
+   - Added additional MySQL contract coverage for recurring fallback and runtime-command lease re-acquisition after expiry.
+   - Added MySQL CI timeout and lock/process diagnostics on failure.
+
 6. P0 parity course-corrections applied
    - processor now applies recurring registration sync semantics for existing jobs/orphans,
    - processor now aborts local job execution when lease extension fails,
