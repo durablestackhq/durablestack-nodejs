@@ -57,9 +57,12 @@
 ## Phase 5 In Progress
 
 - Provider parity kickoff with MySQL-first scaffolding:
-  - MySQL options/table naming/migrator/runtime/store scaffold,
-  - initial MySQL env-gated migration test,
+  - MySQL options/table naming/migrator/runtime/store implementation,
+  - MySQL env-gated integration + contract test coverage,
   - MySQL provider module exports wired in public entrypoint.
+- SQL Server scaffolding now added:
+  - SQL Server options/table naming/migrator/runtime/store scaffold,
+  - SQL Server env-gated scaffold/migration tests.
 
 ## Design Notes
 

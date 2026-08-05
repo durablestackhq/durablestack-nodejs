@@ -277,3 +277,85 @@ test("mysql runtime command lease re-acquisition works after expiry (env-gated)"
     await store.close();
   }
 });
+
+test("mysql runtime command receipts support lease, ack, completion, and upload mark (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_rcpt");
+  try {
+    const leased = await store.tryLeaseRuntimeCommandReceipt("cmd-1", "worker-a", 30);
+    assert.equal(leased, true);
+
+    const acked = await store.markRuntimeCommandAcknowledged("cmd-1", "worker-a", new Date().toISOString());
+    assert.equal(acked, true);
+
+    const succeeded = await store.markRuntimeCommandSucceeded(
+      "cmd-1",
+      "worker-a",
+      new Date().toISOString(),
+      new Date().toISOString(),
+      "run-123"
+    );
+    assert.equal(succeeded, true);
+
+    const receipts = await store.getRuntimeCommandReceipts(10);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]?.status, "succeeded");
+
+    const uploaded = await store.markRuntimeCommandReceiptUploaded("cmd-1");
+    assert.equal(uploaded, true);
+
+    const afterUpload = await store.getRuntimeCommandReceipts(10);
+    assert.equal(afterUpload.length, 0);
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql recurring schedule admin APIs update state (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_sched");
+  try {
+    const registration = {
+      jobName: "recurring-admin",
+      jobType: "recurring-admin",
+      maxAttempts: 3,
+      handler: async () => {},
+      recurring: {
+        cronExpression: "*/1 * * * *",
+        timeZone: "UTC",
+        enabled: true,
+        allowConcurrentRuns: false
+      }
+    };
+
+    const firstNext = new Date(Date.now() + 60_000).toISOString();
+    await store.upsertRecurringJob(registration, firstNext);
+
+    const disabled = await store.setRecurringJobEnabled("recurring-admin", false, undefined);
+    assert.equal(disabled, true);
+
+    const updatedSchedule = await store.updateRecurringJobSchedule(
+      "recurring-admin",
+      "*/5 * * * *",
+      "UTC",
+      new Date(Date.now() + 120_000).toISOString()
+    );
+    assert.equal(updatedSchedule, true);
+
+    const rows = await store.getRecurringJobs(true);
+    const state = rows.find((x) => x.jobName === "recurring-admin");
+    assert.ok(state);
+    assert.equal(state?.enabled, false);
+    assert.equal(state?.cronExpression, "*/5 * * * *");
+  } finally {
+    await store.close();
+  }
+});

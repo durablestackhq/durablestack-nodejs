@@ -2,9 +2,9 @@
 
 ## Status
 
-In progress.
+In progress (MySQL provider semantics implemented; SQL Server/SQLite remaining for provider parity phase).
 
-## Initial Deliverables Added
+## Delivered So Far
 
 1. MySQL provider scaffolding
    - options model (`src/mysql/types.ts`),
@@ -16,17 +16,16 @@ In progress.
 2. Public exports
    - MySQL modules exported from `src/index.ts`.
 
-3. Early test coverage
-   - table prefix/name contract check,
-   - migration table creation check (env-gated by `DURABLESTACK_TEST_MYSQL`),
-   - scaffold guard asserting store methods are not yet implemented.
-
-4. First functional MySQL store APIs
-   - implemented run lifecycle/query subset:
+3. MySQL store implementation
+   - run lifecycle/query APIs:
      - `enqueue`, `claimDueRuns`, `markSucceeded`, `cancelRun`, `markFailed`,
      - `getRun`, `getRecentRuns`, `getRuns`, `getRunsByJobName`, `getRunsByStatus`, `getEnqueuedRuns`,
      - `tryEnqueueIfNoActiveRun`, `extendLease`, `pruneHistoricalRuns`.
-   - remaining recurring/runtime-command receipt APIs are still pending.
+   - recurring APIs:
+     - `upsertRecurringJob`, `getRecurringJobs`, `setRecurringJobEnabled`, `updateRecurringJobSchedule`,
+     - `getDueRecurringJobs`, `updateRecurringNextRun`, `tryMaterializeRecurringRun`.
+   - runtime-command receipt APIs:
+     - lease, ack, success/failure, upload marker lifecycle.
 
 5. MySQL contract test kickoff
    - env-gated contract tests added for:
@@ -36,22 +35,69 @@ In progress.
      - recurring slot race single-winner behavior,
      - runtime-command lease single-winner contention.
 
-8. CI readiness for MySQL tests
+4. MySQL contract/integration coverage
+   - env-gated contract tests include:
+     - lease fencing,
+     - lease reclaim,
+     - no-active-run enqueue dedupe,
+     - recurring slot race single-winner behavior,
+     - recurring fallback materialization under contention,
+     - runtime-command lease single-winner contention,
+     - runtime-command lease re-acquisition after expiry,
+     - runtime-command receipt ack/success/upload lifecycle,
+     - recurring schedule admin state updates.
+   - env-gated integration tests include:
+     - migration baseline tables,
+     - enqueue -> claim -> succeed flow,
+     - migration concurrency safety for same-prefix parallel calls,
+     - migration idempotence under repeated execution.
+
+5. CI readiness for MySQL tests
    - Added dedicated MySQL service job in GitHub Actions.
    - Added failure artifact/log capture for MySQL env-gated test runs.
+    - Added MySQL CI timeout and lock/process diagnostics on failure.
 
-9. MySQL parity-hardening test expansion
-   - Added MySQL integration tests for migration baseline and enqueue/claim/succeed flow.
-   - Added MySQL migration concurrency test for same-prefix parallel calls.
-   - Added additional MySQL contract coverage for recurring fallback and runtime-command lease re-acquisition after expiry.
-   - Added MySQL CI timeout and lock/process diagnostics on failure.
+6. SQL Server provider scaffold kickoff
+   - Added SQL Server provider modules:
+     - `src/sqlserver/types.ts`
+     - `src/sqlserver/table-names.ts`
+     - `src/sqlserver/migrator.ts`
+     - `src/sqlserver/store.ts`
+     - `src/sqlserver/runtime.ts`
+   - Added SQL Server public exports in `src/index.ts`.
+   - Added env-gated SQL Server scaffold tests for:
+     - table naming,
+     - pool connect/close,
+     - baseline migration table creation.
 
-6. P0 parity course-corrections applied
+7. SQL Server run-lifecycle implementation kickoff
+   - Implemented SQL Server store run/query subset:
+     - `enqueue`, `claimDueRuns`, `markSucceeded`, `cancelRun`, `markFailed`,
+     - `getRun`, `getRecentRuns`, `getRuns`, `getRunsByJobName`, `getRunsByStatus`, `getEnqueuedRuns`,
+     - `tryEnqueueIfNoActiveRun`, `extendLease`, `pruneHistoricalRuns`.
+   - Added env-gated SQL Server contract tests for:
+     - lease fencing,
+     - lease reclaim,
+     - no-active-run enqueue dedupe.
+
+8. SQL Server recurring/runtime-command implementation kickoff
+   - Implemented SQL Server recurring APIs:
+     - `upsertRecurringJob`, `getRecurringJobs`, `setRecurringJobEnabled`, `updateRecurringJobSchedule`,
+     - `getDueRecurringJobs`, `updateRecurringNextRun`, `tryMaterializeRecurringRun`.
+   - Implemented SQL Server runtime-command receipt APIs:
+     - `tryLeaseRuntimeCommandReceipt`, `markRuntimeCommandAcknowledged`, `markRuntimeCommandSucceeded`,
+     - `markRuntimeCommandFailed`, `getRuntimeCommandReceipts`, `markRuntimeCommandReceiptUploaded`.
+   - Extended env-gated SQL Server contract tests for:
+     - recurring slot race single-winner behavior,
+     - runtime-command lease single-winner contention,
+     - runtime-command receipt ack/success/upload lifecycle.
+
+9. P0 parity course-corrections applied
    - processor now applies recurring registration sync semantics for existing jobs/orphans,
    - processor now aborts local job execution when lease extension fails,
    - runtime-command receipt upload selection now excludes leased receipts and uploads only acknowledged/succeeded/failed states.
 
-7. P1 and P2 parity course-corrections applied
+10. P1 and P2 parity course-corrections applied
    - retry behavior now supports per-registration mode (`fixed` / `backoff`) and per-registration initial delay,
    - default durable retention moved to 24h to align with durable provider expectations,
    - MySQL table prefix casing now preserves caller-provided prefix,
@@ -59,8 +105,7 @@ In progress.
 
 ## Next Implementation Steps
 
-1. Implement MySQL store run lifecycle APIs.
-2. Implement recurring APIs and atomic slot materialization semantics.
-3. Implement runtime-command receipt lease/ack/completion APIs.
-4. Add MySQL contract tests mirroring Postgres suite.
-5. Add MySQL CI service job for env-enabled provider tests.
+1. Begin SQLite provider scaffolding and baseline migrator.
+2. Add SQLite env-gated scaffold and baseline migration tests.
+3. Implement SQLite run-lifecycle/query subset.
+4. Add provider-level parity checklist for SQL Server/SQLite completion gate.
