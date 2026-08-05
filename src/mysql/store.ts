@@ -620,6 +620,11 @@ export class MySqlDurableJobStore implements DurableJobStore {
       return true;
     } catch (error) {
       await conn.rollback();
+      const code = String((error as { code?: string; errno?: number }).code ?? "");
+      const errno = Number((error as { errno?: number }).errno ?? 0);
+      if (code === "ER_LOCK_DEADLOCK" || errno === 1213 || code === "ER_LOCK_WAIT_TIMEOUT" || errno === 1205) {
+        return false;
+      }
       throw error;
     } finally {
       conn.release();
