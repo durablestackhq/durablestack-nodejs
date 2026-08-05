@@ -46,9 +46,13 @@ function toNVarCharJson(payload: unknown): string | undefined {
   return typeof payload === "string" ? payload : JSON.stringify(payload);
 }
 
+function toCanonicalId(value: unknown): string {
+  return String(value).toLowerCase();
+}
+
 function rowToRun(row: Record<string, unknown>): JobRunRecord {
   return {
-    id: String(row.id),
+    id: toCanonicalId(row.id),
     jobName: String(row.job_name),
     jobType: String(row.job_type),
     status: String(row.status) as RunStatus,
@@ -96,7 +100,7 @@ function rowToReceipt(row: Record<string, unknown>): RuntimeCommandReceiptRecord
     status: String(row.status) as RuntimeCommandReceiptRecord["status"],
     errorCode: row.error_code ? String(row.error_code) : undefined,
     errorMessage: row.error_message ? String(row.error_message) : undefined,
-    runId: row.run_id ? String(row.run_id) : undefined,
+    runId: row.run_id ? toCanonicalId(row.run_id) : undefined,
     recordedAtUtc: toDate(row.recorded_at_utc).toISOString(),
     completedAtUtc: row.completed_at_utc ? toDate(row.completed_at_utc).toISOString() : undefined,
     uploadedAtUtc: row.uploaded_at_utc ? toDate(row.uploaded_at_utc).toISOString() : undefined,
