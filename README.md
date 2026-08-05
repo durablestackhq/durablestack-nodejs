@@ -18,7 +18,7 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - lease heartbeat extension and completion fencing
   - event emission model with core event types
 - Deferred to later phases:
-  - SQL Server/SQLite providers
+  - SQLite provider full runtime semantics
   - framework adapters and convenience bundle package
 
 ## Phase 5 (in progress)
@@ -31,9 +31,13 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - SQL Server options/table naming/migrator/runtime/store implementation,
   - env-gated SQL Server contract/scaffold coverage,
   - dedicated SQL Server CI service job.
+- SQLite scaffolding started:
+  - SQLite options/table naming/migrator/runtime/store scaffold,
+  - env-gated SQLite scaffold/migration tests.
 
 Use env var `DURABLESTACK_TEST_MYSQL` to enable MySQL integration/contract tests locally/CI.
 Use env var `DURABLESTACK_TEST_SQLSERVER` to enable SQL Server scaffold/integration tests locally/CI.
+Use env var `DURABLESTACK_TEST_SQLITE` to enable SQLite scaffold/migration tests locally/CI.
 
 Phase 5 kickoff details are documented in `PHASE-5-KICKOFF.md`.
 

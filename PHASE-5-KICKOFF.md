@@ -103,13 +103,26 @@ In progress (MySQL and SQL Server provider semantics implemented; SQLite remaini
 
 11. P1 and P2 parity course-corrections applied
    - retry behavior now supports per-registration mode (`fixed` / `backoff`) and per-registration initial delay,
-   - default durable retention moved to 24h to align with durable provider expectations,
-   - MySQL table prefix casing now preserves caller-provided prefix,
-   - parity tests added for retry behavior, retention default, table prefix casing, and enqueued-run semantics.
+    - default durable retention moved to 24h to align with durable provider expectations,
+    - MySQL table prefix casing now preserves caller-provided prefix,
+    - parity tests added for retry behavior, retention default, table prefix casing, and enqueued-run semantics.
+
+12. SQLite provider scaffold kickoff
+   - Added SQLite provider modules:
+     - `src/sqlite/types.ts`
+     - `src/sqlite/table-names.ts`
+     - `src/sqlite/migrator.ts`
+     - `src/sqlite/store.ts`
+     - `src/sqlite/runtime.ts`
+   - Added SQLite public exports in `src/index.ts`.
+   - Added env-gated SQLite scaffold tests for:
+     - table naming,
+     - store connect/close,
+     - baseline migration table creation.
 
 ## Next Implementation Steps
 
-1. Begin SQLite provider scaffolding and baseline migrator.
-2. Add SQLite env-gated scaffold and baseline migration tests.
-3. Implement SQLite run-lifecycle/query subset.
+1. Implement SQLite run-lifecycle/query subset.
+2. Add SQLite contract tests for lease/recurring/runtime-command parity.
+3. Add SQLite CI coverage strategy (file-backed DB job or matrix extension).
 4. Add provider-level parity checklist for SQLite completion gate.
