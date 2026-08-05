@@ -27,9 +27,10 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - MySQL options/table naming/migrator/runtime/store implementation,
   - env-gated MySQL integration/contract test coverage,
   - exported MySQL provider entry points.
-- SQL Server scaffolding started:
-  - SQL Server options/table naming/migrator/runtime/store scaffold,
-  - env-gated SQL Server scaffold/migration tests.
+- SQL Server provider implemented:
+  - SQL Server options/table naming/migrator/runtime/store implementation,
+  - env-gated SQL Server contract/scaffold coverage,
+  - dedicated SQL Server CI service job.
 
 Use env var `DURABLESTACK_TEST_MYSQL` to enable MySQL integration/contract tests locally/CI.
 Use env var `DURABLESTACK_TEST_SQLSERVER` to enable SQL Server scaffold/integration tests locally/CI.

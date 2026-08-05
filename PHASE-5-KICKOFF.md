@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress (MySQL provider semantics implemented; SQL Server/SQLite remaining for provider parity phase).
+In progress (MySQL and SQL Server provider semantics implemented; SQLite remaining for provider parity phase).
 
 ## Delivered So Far
 
@@ -80,7 +80,7 @@ In progress (MySQL provider semantics implemented; SQL Server/SQLite remaining f
      - lease reclaim,
      - no-active-run enqueue dedupe.
 
-8. SQL Server recurring/runtime-command implementation kickoff
+8. SQL Server recurring/runtime-command implementation
    - Implemented SQL Server recurring APIs:
      - `upsertRecurringJob`, `getRecurringJobs`, `setRecurringJobEnabled`, `updateRecurringJobSchedule`,
      - `getDueRecurringJobs`, `updateRecurringNextRun`, `tryMaterializeRecurringRun`.
@@ -92,12 +92,16 @@ In progress (MySQL provider semantics implemented; SQL Server/SQLite remaining f
      - runtime-command lease single-winner contention,
      - runtime-command receipt ack/success/upload lifecycle.
 
-9. P0 parity course-corrections applied
+9. SQL Server CI readiness
+   - Added dedicated SQL Server service job in GitHub Actions.
+   - Added failure artifact/log capture for SQL Server env-gated test runs.
+
+10. P0 parity course-corrections applied
    - processor now applies recurring registration sync semantics for existing jobs/orphans,
    - processor now aborts local job execution when lease extension fails,
    - runtime-command receipt upload selection now excludes leased receipts and uploads only acknowledged/succeeded/failed states.
 
-10. P1 and P2 parity course-corrections applied
+11. P1 and P2 parity course-corrections applied
    - retry behavior now supports per-registration mode (`fixed` / `backoff`) and per-registration initial delay,
    - default durable retention moved to 24h to align with durable provider expectations,
    - MySQL table prefix casing now preserves caller-provided prefix,
@@ -108,4 +112,4 @@ In progress (MySQL provider semantics implemented; SQL Server/SQLite remaining f
 1. Begin SQLite provider scaffolding and baseline migrator.
 2. Add SQLite env-gated scaffold and baseline migration tests.
 3. Implement SQLite run-lifecycle/query subset.
-4. Add provider-level parity checklist for SQL Server/SQLite completion gate.
+4. Add provider-level parity checklist for SQLite completion gate.

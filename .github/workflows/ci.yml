@@ -155,3 +155,60 @@ jobs:
       - name: Fail job if MySQL tests failed
         if: ${{ steps.mysql_tests.outcome != 'success' }}
         run: exit 1
+
+  sqlserver-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "DurableStack_ci123!"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P DurableStack_ci123! -Q 'select 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (SQL Server enabled)
+        id: sqlserver_tests
+        continue-on-error: true
+        env:
+          DURABLESTACK_TEST_SQLSERVER: "Server=127.0.0.1,1433;User Id=sa;Password=DurableStack_ci123!;Database=master;Encrypt=false;TrustServerCertificate=true"
+        run: set -o pipefail && npm test 2>&1 | tee sqlserver-test-output.log
+
+      - name: Upload SQL Server test output artifact (on failure)
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlserver-test-output
+          path: sqlserver-test-output.log
+          if-no-files-found: ignore
+
+      - name: Show SQL Server test log tail (on failure)
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        run: tail -n 200 sqlserver-test-output.log || true
+
+      - name: Fail job if SQL Server tests failed
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        run: exit 1

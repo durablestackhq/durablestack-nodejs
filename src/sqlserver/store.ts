@@ -637,6 +637,10 @@ export class SqlServerDurableJobStore implements DurableJobStore {
       return true;
     } catch (error) {
       await tx.rollback();
+      const number = Number((error as { number?: number }).number ?? 0);
+      if (number === 1205 || number === 2601 || number === 2627) {
+        return false;
+      }
       throw error;
     }
   }
