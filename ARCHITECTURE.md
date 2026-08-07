@@ -54,15 +54,18 @@
   - strict fail-on-error and best-effort continue-on-error loading modes,
   - recurring autodiscovery behavior covered by runtime tests.
 
-## Phase 5 In Progress
+## Phase 5 Delivered Here
 
-- Provider parity kickoff with MySQL-first scaffolding:
+- Provider parity implementation across SQL backends:
   - MySQL options/table naming/migrator/runtime/store implementation,
-  - MySQL env-gated integration + contract test coverage,
-  - MySQL provider module exports wired in public entrypoint.
-- SQL Server scaffolding now added:
-  - SQL Server options/table naming/migrator/runtime/store scaffold,
-  - SQL Server env-gated scaffold/migration tests.
+  - SQL Server options/table naming/migrator/runtime/store implementation,
+  - SQLite options/table naming/migrator/runtime/store implementation.
+- Provider validation coverage:
+  - env-gated contract/scaffold/integration tests across providers,
+  - recurring race and runtime-command lease contention checks,
+  - migration safety/idempotence checks.
+- CI coverage:
+  - dedicated provider jobs for Postgres, MySQL, SQL Server, and SQLite with failure artifact/log diagnostics.
 
 ## Design Notes
 
@@ -73,5 +76,4 @@
 
 ## Deferred From Initial Build
 
-- Durable SQL providers beyond Postgres (SQL Server/SQLite) after MySQL completion.
 - Framework adapters and convenience bundle package.
