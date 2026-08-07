@@ -122,7 +122,6 @@ In progress (MySQL and SQL Server provider semantics implemented; SQLite remaini
 
 ## Next Implementation Steps
 
-1. Implement SQLite run-lifecycle/query subset.
-2. Add SQLite contract tests for lease/recurring/runtime-command parity.
-3. Add SQLite CI coverage strategy (file-backed DB job or matrix extension).
-4. Add provider-level parity checklist for SQLite completion gate.
+1. Add SQLite CI coverage strategy (file-backed DB job or matrix extension).
+2. Run full provider parity checklist closure (MySQL/SQL Server/SQLite).
+3. Prepare Phase 5 completion document and architecture/status updates.

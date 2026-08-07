@@ -32,8 +32,8 @@ This repository currently contains the Phase 0 and Phase 1 foundation for the Du
   - env-gated SQL Server contract/scaffold coverage,
   - dedicated SQL Server CI service job.
 - SQLite scaffolding started:
-  - SQLite options/table naming/migrator/runtime/store scaffold,
-  - env-gated SQLite scaffold/migration tests.
+  - SQLite options/table naming/migrator/runtime/store implementation,
+  - env-gated SQLite scaffold/contract coverage.
 
 Use env var `DURABLESTACK_TEST_MYSQL` to enable MySQL integration/contract tests locally/CI.
 Use env var `DURABLESTACK_TEST_SQLSERVER` to enable SQL Server scaffold/integration tests locally/CI.
