@@ -8,6 +8,15 @@ import { migrateSqlite } from "../src/sqlite/migrator.js";
 
 const enabled = process.env.DURABLESTACK_TEST_SQLITE;
 
+async function supportsNodeSqlite(): Promise<boolean> {
+  try {
+    await import("node:sqlite");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type IsolatedStore = {
   store: SqliteDurableJobStore;
   cleanup(): Promise<void>;
@@ -47,6 +56,11 @@ function isSameSlot(a: string | undefined, b: string): boolean {
 }
 
 test("sqlite lease fencing blocks stale completion write (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -70,6 +84,11 @@ test("sqlite lease fencing blocks stale completion write (env-gated)", async (t)
 });
 
 test("sqlite expired lease can be reclaimed by another worker (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -96,6 +115,11 @@ test("sqlite expired lease can be reclaimed by another worker (env-gated)", asyn
 });
 
 test("sqlite enqueue-if-no-active-run deduplicates pending/leased and allows after terminal (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -127,6 +151,11 @@ test("sqlite enqueue-if-no-active-run deduplicates pending/leased and allows aft
 });
 
 test("sqlite recurring slot materialization is single-winner under race (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -191,6 +220,11 @@ test("sqlite recurring slot materialization is single-winner under race (env-gat
 });
 
 test("sqlite runtime command lease is single-winner under contention (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -212,6 +246,11 @@ test("sqlite runtime command lease is single-winner under contention (env-gated)
 });
 
 test("sqlite runtime command lease re-acquisition works after expiry (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -233,6 +272,11 @@ test("sqlite runtime command lease re-acquisition works after expiry (env-gated)
 });
 
 test("sqlite runtime command receipts support lease, ack, completion, and upload mark (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -271,6 +315,11 @@ test("sqlite runtime command receipts support lease, ack, completion, and upload
 });
 
 test("sqlite recurring schedule admin APIs update state (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!enabled) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;

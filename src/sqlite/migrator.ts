@@ -1,15 +1,24 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { resolveSqliteTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
+
+export interface SqliteDatabaseLike {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown;
+    run(...params: unknown[]): unknown;
+  };
+  close(): void;
+}
 
 function qi(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-export async function migrateSqlite(db: DatabaseSync, tablePrefix: string | undefined): Promise<void> {
+export async function migrateSqlite(db: SqliteDatabaseLike, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveSqliteTableNames(tablePrefix);
 
   db.exec(`
@@ -100,10 +109,12 @@ export async function migrateSqlite(db: DatabaseSync, tablePrefix: string | unde
   }
 }
 
-export async function createSqliteDatabase(databasePath: string): Promise<DatabaseSync> {
+export async function createSqliteDatabase(databasePath: string): Promise<SqliteDatabaseLike> {
   if (databasePath !== ":memory:") {
     const parent = path.dirname(databasePath);
     await mkdir(parent, { recursive: true });
   }
-  return new DatabaseSync(databasePath);
+
+  const sqliteModule = await import("node:sqlite");
+  return new sqliteModule.DatabaseSync(databasePath);
 }

@@ -9,6 +9,15 @@ import { SqliteDurableJobStore } from "../src/sqlite/store.js";
 
 const sqlitePath = process.env.DURABLESTACK_TEST_SQLITE;
 
+async function supportsNodeSqlite(): Promise<boolean> {
+  try {
+    await import("node:sqlite");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 test("sqlite table names apply prefix consistently", () => {
   const tables = resolveSqliteTableNames("App_");
   assert.equal(tables.jobs, "App_durable_stack_jobs");
@@ -18,6 +27,11 @@ test("sqlite table names apply prefix consistently", () => {
 });
 
 test("sqlite store can be constructed, connected, and closed (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!sqlitePath) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;
@@ -30,6 +44,11 @@ test("sqlite store can be constructed, connected, and closed (env-gated)", async
 });
 
 test("sqlite migration creates baseline tables (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
   if (!sqlitePath) {
     t.skip("DURABLESTACK_TEST_SQLITE is not set");
     return;

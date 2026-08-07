@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import {
   RUN_STATUS,
   RUNTIME_COMMAND_RECEIPT_STATUS,
@@ -13,7 +12,7 @@ import type {
 } from "../types.js";
 import { addSeconds, generateId } from "../utils.js";
 import type { SqliteDurableStackOptions } from "./types.js";
-import { createSqliteDatabase } from "./migrator.js";
+import { createSqliteDatabase, type SqliteDatabaseLike } from "./migrator.js";
 import { resolveSqliteTableNames } from "./table-names.js";
 
 function nowIso(): string {
@@ -115,7 +114,7 @@ function isBusyOrConstraint(error: unknown): boolean {
 }
 
 export class SqliteDurableJobStore implements DurableJobStore {
-  private db: DatabaseSync | undefined;
+  private db: SqliteDatabaseLike | undefined;
   private readonly options: SqliteDurableStackOptions;
   private readonly tables: {
     jobs: string;
@@ -135,14 +134,14 @@ export class SqliteDurableJobStore implements DurableJobStore {
     }
   }
 
-  private getDb(): DatabaseSync {
+  private getDb(): SqliteDatabaseLike {
     if (!this.db) {
       throw new Error("SQLite store is not connected.");
     }
     return this.db;
   }
 
-  public getDatabase(): DatabaseSync {
+  public getDatabase(): SqliteDatabaseLike {
     return this.getDb();
   }
 
