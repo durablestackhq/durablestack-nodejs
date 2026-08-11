@@ -5,6 +5,27 @@ import { DurableJobRegistry } from "./registry.js";
 import type { DurableJobStore, DurableStackEvent, DurableStackEventSink, JobRunRecord, NormalizedDurableStackOptions } from "./types.js";
 import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse } from "./utils.js";
 
+function truncateText(value: string, maxLength: number): string {
+  if (maxLength <= 0) {
+    return "";
+  }
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function getErrorDetail(error: unknown): string | undefined {
+  if (error instanceof Error && typeof error.stack === "string" && error.stack.trim().length > 0) {
+    return error.stack;
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return undefined;
+  }
+}
+
 export class DurableStackProcessor {
   private readonly inFlight = new Set<Promise<void>>();
   private nextRetentionSweepAtUtc = "1970-01-01T00:00:00.000Z";
@@ -225,6 +246,9 @@ export class DurableStackProcessor {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown job failure";
+      const errorDetail = this.options.eventing.includeErrorDetail
+        ? truncateText(getErrorDetail(error) ?? message, Math.max(1, this.options.eventing.maxErrorDetailLength))
+        : undefined;
       const shouldRetry = run.attempt < run.maxAttempts;
       const retryBehavior = registration.retryBehavior ?? registration.recurring?.retryBehavior ?? "backoff";
       const initialDelay = registration.retryInitialDelaySeconds
@@ -256,6 +280,7 @@ export class DurableStackProcessor {
           workerName: this.options.workerName,
           errorType: error instanceof Error ? error.name : "Error",
           errorMessage: message,
+          errorDetail,
           durationMs: Date.now() - started,
           retryAtUtc
         });

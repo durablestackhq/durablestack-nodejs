@@ -1,12 +1,40 @@
 {
-  "name": "durablestack-nodejs",
-  "private": true,
-  "version": "0.0.1",
-  "description": "DurableStack Node.js runtime foundation (Phase 0 and Phase 1)",
+  "name": "durablestack",
+  "version": "0.0.1-beta.3",
+  "description": "Durable background jobs for Node.js with PostgreSQL, MySQL, SQL Server, SQLite, and in-memory providers.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/durablestackhq/durablestack-nodejs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/durablestackhq/durablestack-nodejs/issues"
+  },
+  "homepage": "https://github.com/durablestackhq/durablestack-nodejs#readme",
+  "keywords": [
+    "durable-jobs",
+    "job-scheduler",
+    "background-jobs",
+    "cron",
+    "postgres",
+    "mysql",
+    "sqlserver",
+    "sqlite"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "minimatch": "^10.2.6",
     "mssql": "^11.0.1",
@@ -19,7 +47,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
     "@types/mssql": "^9.1.11",

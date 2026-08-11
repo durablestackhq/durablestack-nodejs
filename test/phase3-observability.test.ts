@@ -38,6 +38,22 @@ test("ingestion sync posts batch with auth headers", async () => {
     workerName: "worker-a"
   });
 
+  await sink.publish({
+    eventId: "evt-hb-1",
+    eventType: EVENT_TYPES.WORKER_HEARTBEAT,
+    eventVersion: 2,
+    occurredAtUtc: new Date().toISOString(),
+    workerName: "worker-a"
+  });
+
+  await sink.publish({
+    eventId: "evt-hb-2",
+    eventType: EVENT_TYPES.WORKER_HEARTBEAT,
+    eventVersion: 2,
+    occurredAtUtc: new Date().toISOString(),
+    workerName: "worker-a"
+  });
+
   const service = new IngestionEventSyncService(
     sink,
     options,
@@ -62,8 +78,20 @@ test("ingestion sync posts batch with auth headers", async () => {
 
   const body = JSON.parse(req.body);
   assert.equal(body.tenantId, "tenant-1");
-  assert.equal(body.events.length, 1);
-  assert.equal(body.events[0].runtime, "Node.js");
+  assert.equal(body.events.length, 2);
+  const nonHeartbeat = body.events.find((x: { eventType: string }) => x.eventType === EVENT_TYPES.JOB_STARTED);
+  const heartbeatBatch = body.events.find((x: { eventType: string }) => x.eventType === "worker_heartbeat_batch");
+  assert.ok(nonHeartbeat);
+  assert.ok(heartbeatBatch);
+  assert.equal(nonHeartbeat.runtime, "Node.js");
+  assert.equal(heartbeatBatch.runtime, "Node.js");
+
+  const payload = JSON.parse(nonHeartbeat.payloadJson);
+  assert.equal(payload.errorDetail, undefined);
+  assert.equal(payload.message, undefined);
+
+  const heartbeatPayload = JSON.parse(heartbeatBatch.payloadJson);
+  assert.equal(heartbeatPayload.heartbeatCount, 2);
 });
 
 test("ingestion sync retries transient 429 responses and succeeds", async () => {

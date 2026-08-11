@@ -6,8 +6,22 @@ import type {
   TelemetryBatchResponse,
   TelemetryEventDto
 } from "../types.js";
+import { EVENT_TYPES } from "../constants.js";
 import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
 import { nowIso, sleep } from "../utils.js";
+
+function buildPayloadJson(event: DurableStackEvent): string {
+  return JSON.stringify({
+    message: event.message,
+    errorType: event.errorType,
+    errorMessage: event.errorMessage,
+    errorDetail: event.errorDetail,
+    durationMs: event.durationMs,
+    retryAtUtc: event.retryAtUtc,
+    traceId: event.traceId,
+    spanId: event.spanId
+  });
+}
 
 function toTelemetryEventDto(event: DurableStackEvent): TelemetryEventDto {
   return {
@@ -22,8 +36,64 @@ function toTelemetryEventDto(event: DurableStackEvent): TelemetryEventDto {
     durationMs: event.durationMs,
     errorType: event.errorType,
     errorMessage: event.errorMessage,
-    payloadJson: event.message
+    payloadJson: buildPayloadJson(event)
   };
+}
+
+function getLatestEvent(events: DurableStackEvent[]): DurableStackEvent {
+  return events.reduce((latest, current) =>
+    Date.parse(current.occurredAtUtc) > Date.parse(latest.occurredAtUtc) ? current : latest
+  );
+}
+
+function getEarliestEvent(events: DurableStackEvent[]): DurableStackEvent {
+  return events.reduce((earliest, current) =>
+    Date.parse(current.occurredAtUtc) < Date.parse(earliest.occurredAtUtc) ? current : earliest
+  );
+}
+
+function buildTelemetryEvents(
+  events: DurableStackEvent[],
+  runtimeName: string,
+  runtimeVersion: string
+): TelemetryEventDto[] {
+  const list: TelemetryEventDto[] = [];
+  const heartbeatEvents: DurableStackEvent[] = [];
+
+  for (const event of events) {
+    if (event.eventType === EVENT_TYPES.WORKER_HEARTBEAT) {
+      heartbeatEvents.push(event);
+      continue;
+    }
+
+    list.push({
+      ...toTelemetryEventDto(event),
+      runtime: runtimeName,
+      runtimeVersion
+    });
+  }
+
+  if (heartbeatEvents.length > 0) {
+    const latest = getLatestEvent(heartbeatEvents);
+    const earliest = getEarliestEvent(heartbeatEvents);
+    const heartbeatPayload = JSON.stringify({
+      heartbeatCount: heartbeatEvents.length,
+      firstHeartbeatAtUtc: earliest.occurredAtUtc,
+      lastHeartbeatAtUtc: latest.occurredAtUtc
+    });
+
+    list.push({
+      eventType: "worker_heartbeat_batch",
+      eventVersion: latest.eventVersion,
+      occurredAtUtc: latest.occurredAtUtc,
+      workerName: latest.workerName,
+      runtime: runtimeName,
+      runtimeVersion,
+      payloadJson: heartbeatPayload
+    });
+  }
+
+  return list;
 }
 
 function buildIdempotencyKey(workerName: string, sequence: number): string {
@@ -113,11 +183,7 @@ export class IngestionEventSyncService {
       tenantId: this.options.eventing.tenantId,
       idempotencyKey,
       serviceName: this.options.eventing.serviceName,
-      events: batch.map((event) => ({
-        ...toTelemetryEventDto(event),
-        runtime: this.runtimeName,
-        runtimeVersion: this.runtimeVersion
-      }))
+      events: buildTelemetryEvents(batch, this.runtimeName, this.runtimeVersion)
     };
 
     const json = JSON.stringify(payload);

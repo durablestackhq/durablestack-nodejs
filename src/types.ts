@@ -119,7 +119,7 @@ export interface RuntimeControlSyncResponse {
 }
 
 export interface TelemetryEventDto {
-  eventType: DurableEventType;
+  eventType: string;
   eventVersion: number;
   occurredAtUtc: string;
   runId?: string;
