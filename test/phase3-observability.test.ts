@@ -446,6 +446,148 @@ test("runtime control sync skips expired commands", async () => {
   assert.equal(receipts.length, 0);
 });
 
+test("runtime control sync records failed receipt for blank command type", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const adminCalls = {
+    setEnabled: 0,
+    updateCron: 0,
+    runNow: 0
+  };
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: async () => [],
+    setScheduledJobEnabled: async () => {
+      adminCalls.setEnabled += 1;
+      return true;
+    },
+    updateScheduledJobCron: async () => {
+      adminCalls.updateCron += 1;
+      return true;
+    },
+    runScheduledJobNow: async () => {
+      adminCalls.runNow += 1;
+      return "run-1";
+    }
+  };
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync",
+      runtimeControlSyncIntervalSeconds: 5,
+      runtimeControlCommandLeaseDurationSeconds: 30,
+      runtimeControlMaxReceiptUpload: 200
+    }
+  });
+
+  const service = new RuntimeControlSyncService(
+    store,
+    admin,
+    options,
+    async () => ({
+      status: 200,
+      bodyText: JSON.stringify({
+        serverTimeUtc: new Date().toISOString(),
+        commands: [
+          {
+            commandId: "cmd-blank-type",
+            commandType: "   ",
+            payloadJson: "{}",
+            issuedAtUtc: new Date().toISOString()
+          }
+        ]
+      })
+    })
+  );
+
+  await service.syncOnce(new AbortController().signal);
+
+  assert.equal(adminCalls.setEnabled, 0);
+  assert.equal(adminCalls.updateCron, 0);
+  assert.equal(adminCalls.runNow, 0);
+
+  const receipts = await store.getRuntimeCommandReceipts(10);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.commandId, "cmd-blank-type");
+  assert.equal(receipts[0]?.status, "failed");
+  assert.equal(receipts[0]?.errorCode, "invalid_command_type");
+});
+
+test("runtime control sync records failed receipt for malformed payload json", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const adminCalls = {
+    setEnabled: 0,
+    updateCron: 0,
+    runNow: 0
+  };
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: async () => [],
+    setScheduledJobEnabled: async () => {
+      adminCalls.setEnabled += 1;
+      return true;
+    },
+    updateScheduledJobCron: async () => {
+      adminCalls.updateCron += 1;
+      return true;
+    },
+    runScheduledJobNow: async () => {
+      adminCalls.runNow += 1;
+      return "run-1";
+    }
+  };
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync",
+      runtimeControlSyncIntervalSeconds: 5,
+      runtimeControlCommandLeaseDurationSeconds: 30,
+      runtimeControlMaxReceiptUpload: 200
+    }
+  });
+
+  const service = new RuntimeControlSyncService(
+    store,
+    admin,
+    options,
+    async () => ({
+      status: 200,
+      bodyText: JSON.stringify({
+        serverTimeUtc: new Date().toISOString(),
+        commands: [
+          {
+            commandId: "cmd-bad-payload",
+            commandType: "set_schedule_enabled",
+            payloadJson: "{",
+            issuedAtUtc: new Date().toISOString()
+          }
+        ]
+      })
+    })
+  );
+
+  await service.syncOnce(new AbortController().signal);
+
+  assert.equal(adminCalls.setEnabled, 0);
+  assert.equal(adminCalls.updateCron, 0);
+  assert.equal(adminCalls.runNow, 0);
+
+  const receipts = await store.getRuntimeCommandReceipts(10);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.commandId, "cmd-bad-payload");
+  assert.equal(receipts[0]?.status, "failed");
+  assert.equal(receipts[0]?.errorCode, "invalid_payload");
+});
+
 test("runtime control sync uploads existing receipts before processing new commands", async () => {
   const store = new InMemoryDurableJobStore();
 

@@ -2,8 +2,7 @@ import {
   CURRENT_EVENT_VERSION,
   type DurableEventType,
   type RunStatus,
-  type RuntimeCommandReceiptStatus,
-  type RuntimeCommandType
+  type RuntimeCommandReceiptStatus
 } from "./constants.js";
 
 export type RetryBehavior = "fixed" | "backoff";
@@ -97,7 +96,7 @@ export interface RuntimeCommandReceiptDto {
 
 export interface RuntimeCommandEnvelopeDto {
   commandId: string;
-  commandType: RuntimeCommandType;
+  commandType: string;
   payloadJson: string;
   issuedAtUtc: string;
   expiresAtUtc?: string;

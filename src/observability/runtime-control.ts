@@ -12,6 +12,13 @@ import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
 import { nowIso, sleep } from "../utils.js";
 import { validateRuntimeCommandEnvelopeDto, validateRuntimeControlSyncRequest } from "../validators.js";
 
+function computeBackoffDelayMs(attempt: number): number {
+  const bounded = Math.max(1, attempt);
+  const base = Math.min(30_000, 500 * Math.pow(2, Math.max(0, bounded - 1)));
+  const jitter = Math.floor(Math.random() * 250);
+  return base + jitter;
+}
+
 export interface RuntimeControlAdmin {
   listScheduledJobs(includeDisabled: boolean): Promise<RecurringJobState[]>;
   setScheduledJobEnabled(jobName: string, enabled: boolean): Promise<boolean>;
@@ -136,9 +143,10 @@ export class RuntimeControlSyncService {
         }, signal);
       } catch {
         if (attempt >= maxAttempts) {
+          console.warn("DurableStack runtime control sync failed after retries due to request error.");
           return;
         }
-        await sleep(Math.min(10, attempt) * 200);
+        await sleep(computeBackoffDelayMs(attempt));
         continue;
       }
 
@@ -148,14 +156,20 @@ export class RuntimeControlSyncService {
       }
 
       if (response.status === 401 || response.status === 403) {
+        console.warn(`DurableStack runtime control sync authorization failed with status ${response.status}.`);
         return;
       }
 
       if (!isTransientStatus(response.status) || attempt >= maxAttempts) {
+        if (!isTransientStatus(response.status)) {
+          console.warn(`DurableStack runtime control sync rejected without retry. Status=${response.status}.`);
+        } else {
+          console.warn(`DurableStack runtime control sync failed after retries. Status=${response.status}.`);
+        }
         return;
       }
 
-      await sleep(Math.min(10, attempt) * 200);
+      await sleep(computeBackoffDelayMs(attempt));
     }
 
     if (!responseBody) {
@@ -238,9 +252,20 @@ export class RuntimeControlSyncService {
     | { success: true; runId?: string }
     | { success: false; errorCode: string; errorMessage: string }
   > {
-    const payload = JSON.parse(command.payloadJson || "{}");
+    const commandType = command.commandType.trim();
+    if (!commandType) {
+      return { success: false, errorCode: "invalid_command_type", errorMessage: "CommandType is required." };
+    }
 
-    switch (command.commandType) {
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(command.payloadJson || "{}");
+      payload = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
+    } catch {
+      payload = {};
+    }
+
+    switch (commandType) {
       case "set_schedule_enabled": {
         if (!payload || typeof payload.jobName !== "string" || typeof payload.enabled !== "boolean") {
           return { success: false, errorCode: "invalid_payload", errorMessage: "Payload must include jobName and enabled." };
@@ -290,18 +315,19 @@ export class RuntimeControlSyncService {
         return {
           success: false,
           errorCode: "unsupported_command_type",
-          errorMessage: `Unsupported command type '${command.commandType}'.`
+          errorMessage: `Unsupported command type '${commandType}'.`
         };
     }
   }
 
   public static parseResponse(json: string): RuntimeControlSyncResponse | undefined {
     try {
-      const parsed = JSON.parse(json) as RuntimeControlSyncResponse;
-      if (!Array.isArray(parsed.commands)) {
-        return undefined;
-      }
-      return parsed;
+      const parsed = JSON.parse(json) as Partial<RuntimeControlSyncResponse>;
+      const commands = Array.isArray(parsed.commands) ? parsed.commands : [];
+      return {
+        serverTimeUtc: parsed.serverTimeUtc ?? nowIso(),
+        commands
+      };
     } catch {
       return undefined;
     }
