@@ -199,6 +199,9 @@ export class DurableStackProcessor {
     const signalAbortListener = () => propagateAbort();
     signal.addEventListener("abort", signalAbortListener, { once: true });
     localAbort.signal.addEventListener("abort", propagateAbort, { once: true });
+    if (signal.aborted) {
+      propagateAbort();
+    }
 
     let leaseLost = false;
     const heartbeatHandle = setInterval(() => {
@@ -245,6 +248,10 @@ export class DurableStackProcessor {
         });
       }
     } catch (error) {
+      if (signal.aborted && combinedAbort.signal.aborted && !leaseLost) {
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Unknown job failure";
       const errorDetail = this.options.eventing.includeErrorDetail
         ? truncateText(getErrorDetail(error) ?? message, Math.max(1, this.options.eventing.maxErrorDetailLength))

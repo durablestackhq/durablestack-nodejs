@@ -399,3 +399,41 @@ test("runtime cancels handler when lease extension fails", async () => {
   assert.ok(run);
   assert.notEqual(run?.status, "succeeded");
 });
+
+test("runtime shutdown does not record failed run for cancellation", async () => {
+  const store = new InMemoryDurableJobStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 2,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 2
+  });
+
+  runtime.registerJob("shutdown-sensitive", async (_payload, _ctx, signal) => {
+    while (!signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("aborted_by_shutdown");
+  });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("shutdown-sensitive");
+
+  let leasedObserved = false;
+  for (let i = 0; i < 20; i += 1) {
+    const run = await runtime.getRun(runId);
+    if (run?.status === "leased") {
+      leasedObserved = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  await runtime.stop();
+  const afterStop = await runtime.getRun(runId);
+
+  assert.equal(leasedObserved, true);
+  assert.ok(afterStop);
+  assert.equal(afterStop?.status, "leased");
+});
