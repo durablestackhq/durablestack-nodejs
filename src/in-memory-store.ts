@@ -451,7 +451,14 @@ export class InMemoryDurableJobStore implements DurableJobStore {
 
   async getRuntimeCommandReceipts(take: number): Promise<RuntimeCommandReceiptRecord[]> {
     return Array.from(this.runtimeReceipts.values())
-      .filter((receipt) => !receipt.uploadedAtUtc)
+      .filter((receipt) =>
+        !receipt.uploadedAtUtc
+        && (
+          receipt.status === RUNTIME_COMMAND_RECEIPT_STATUS.ACKNOWLEDGED
+          || receipt.status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED
+          || receipt.status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED
+        )
+      )
       .sort((a, b) => compareIsoAsc(a.recordedAtUtc, b.recordedAtUtc))
       .slice(0, Math.max(1, take))
       .map((receipt) => ({ ...receipt }));

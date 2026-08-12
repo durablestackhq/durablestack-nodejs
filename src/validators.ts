@@ -1,8 +1,7 @@
 import {
   CURRENT_EVENT_VERSION,
   EVENT_TYPES,
-  RUNTIME_COMMAND_RECEIPT_STATUS,
-  RUNTIME_COMMAND_TYPES
+  RUNTIME_COMMAND_RECEIPT_STATUS
 } from "./constants.js";
 import type {
   RuntimeCommandEnvelopeDto,
@@ -53,10 +52,6 @@ export function validateRuntimeCommandEnvelopeDto(value: unknown): asserts value
   assert(isObject(value), "runtime command envelope must be an object");
   assert(typeof value.commandId === "string" && value.commandId.length > 0, "commandId is required");
   assert(typeof value.commandType === "string", "commandType is required");
-  assert(
-    Object.values(RUNTIME_COMMAND_TYPES).includes(value.commandType as (typeof RUNTIME_COMMAND_TYPES)[keyof typeof RUNTIME_COMMAND_TYPES]),
-    "commandType is invalid"
-  );
   assert(typeof value.payloadJson === "string", "payloadJson is required");
   assert(isIsoDate(value.issuedAtUtc), "issuedAtUtc must be an ISO date");
   if (typeof value.expiresAtUtc !== "undefined") {

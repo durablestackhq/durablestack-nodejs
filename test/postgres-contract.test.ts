@@ -162,3 +162,33 @@ test("postgres runtime command lease is single-winner under contention (env-gate
     await store.close();
   }
 });
+
+test("postgres enqueue-if-no-active-run deduplicates pending/leased and allows after terminal (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_POSTGRES is not set");
+    return;
+  }
+
+  const store = await createIsolatedStore("it_noactive");
+  try {
+    const first = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+    assert.ok(first);
+
+    const blockedWhilePending = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+    assert.equal(blockedWhilePending, undefined);
+
+    const [claimed] = await store.claimDueRuns("worker-a", 1, 30);
+    assert.equal(claimed?.id, first);
+
+    const blockedWhileLeased = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+    assert.equal(blockedWhileLeased, undefined);
+
+    const done = await store.markSucceeded(first, "worker-a");
+    assert.equal(done, true);
+
+    const allowedAfterTerminal = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+    assert.ok(allowedAfterTerminal);
+  } finally {
+    await store.close();
+  }
+});

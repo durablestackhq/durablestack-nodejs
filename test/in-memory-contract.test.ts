@@ -151,3 +151,25 @@ test("runtime command receipts support lease, ack, completion, and upload mark",
   const afterUpload = await store.getRuntimeCommandReceipts(10);
   assert.equal(afterUpload.length, 0);
 });
+
+test("enqueue-if-no-active-run deduplicates pending/leased and allows after terminal", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const first = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+  assert.ok(first);
+
+  const blockedWhilePending = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+  assert.equal(blockedWhilePending, undefined);
+
+  const [claimed] = await store.claimDueRuns("worker-a", 1, 30);
+  assert.equal(claimed?.id, first);
+
+  const blockedWhileLeased = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+  assert.equal(blockedWhileLeased, undefined);
+
+  const marked = await store.markSucceeded(first, "worker-a");
+  assert.equal(marked, true);
+
+  const allowedAfterTerminal = await store.tryEnqueueIfNoActiveRun("job-a", "job-a", undefined, new Date().toISOString(), 3);
+  assert.ok(allowedAfterTerminal);
+});

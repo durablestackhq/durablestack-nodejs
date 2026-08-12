@@ -2,8 +2,7 @@ import {
   CURRENT_EVENT_VERSION,
   type DurableEventType,
   type RunStatus,
-  type RuntimeCommandReceiptStatus,
-  type RuntimeCommandType
+  type RuntimeCommandReceiptStatus
 } from "./constants.js";
 
 export type RetryBehavior = "fixed" | "backoff";
@@ -97,7 +96,7 @@ export interface RuntimeCommandReceiptDto {
 
 export interface RuntimeCommandEnvelopeDto {
   commandId: string;
-  commandType: RuntimeCommandType;
+  commandType: string;
   payloadJson: string;
   issuedAtUtc: string;
   expiresAtUtc?: string;
@@ -116,10 +115,12 @@ export interface RuntimeControlSyncRequest {
 export interface RuntimeControlSyncResponse {
   serverTimeUtc: string;
   commands: RuntimeCommandEnvelopeDto[];
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 export interface TelemetryEventDto {
-  eventType: DurableEventType;
+  eventType: string;
   eventVersion: number;
   occurredAtUtc: string;
   runId?: string;
@@ -169,6 +170,8 @@ export interface DurableJobRegistration {
   jobName: string;
   jobType: string;
   maxAttempts: number;
+  retryBehavior?: RetryBehavior;
+  retryInitialDelaySeconds?: number;
   recurring?: {
     cronExpression: string;
     timeZone: string;
@@ -207,13 +210,27 @@ export interface DurableStackEventingOptions {
   ingestionMaxRequestBodyBytes?: number;
   ingestionMaxRetryAttempts?: number;
   ingestionFlushIntervalSeconds?: number;
+  ingestionSyncJitterEnabled?: boolean;
+  ingestionSyncJitterRatio?: number;
   includeErrorDetail?: boolean;
   maxErrorDetailLength?: number;
   runtimeControlEnabled?: boolean;
   runtimeControlSyncPath?: string;
   runtimeControlSyncIntervalSeconds?: number;
+  runtimeControlSyncJitterEnabled?: boolean;
+  runtimeControlSyncJitterRatio?: number;
   runtimeControlMaxReceiptUpload?: number;
   runtimeControlCommandLeaseDurationSeconds?: number;
+}
+
+export interface DurableStackAutodiscoveryOptions {
+  enabled?: boolean;
+  includeGlobs?: string[];
+  excludeGlobs?: string[];
+  failOnError?: boolean;
+  maxModules?: number;
+  baseDir?: string;
+  exportName?: string;
 }
 
 export interface DurableStackOptions {
@@ -233,6 +250,7 @@ export interface DurableStackOptions {
   recurring?: DurableStackRecurringOptions;
   retention?: DurableStackRetentionOptions;
   eventing?: DurableStackEventingOptions;
+  autodiscovery?: DurableStackAutodiscoveryOptions;
 }
 
 export interface NormalizedDurableStackOptions {
@@ -263,6 +281,15 @@ export interface NormalizedDurableStackOptions {
     deleteBatchSize: number;
   };
   eventing: Required<DurableStackEventingOptions>;
+  autodiscovery: {
+    enabled: boolean;
+    includeGlobs: string[];
+    excludeGlobs: string[];
+    failOnError: boolean;
+    maxModules: number;
+    baseDir: string;
+    exportName: string;
+  };
 }
 
 export interface DurableJobStore {

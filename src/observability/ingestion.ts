@@ -6,8 +6,51 @@ import type {
   TelemetryBatchResponse,
   TelemetryEventDto
 } from "../types.js";
+import { EVENT_TYPES } from "../constants.js";
 import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
-import { nowIso, sleep } from "../utils.js";
+import { generateId, nowIso, randomJittered, sleep } from "../utils.js";
+
+function normalizeRuntimeVersion(value: string): string {
+  const trimmed = (value || "").trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+
+  return trimmed.replace(/^v/i, "");
+}
+
+function defaultRuntimeName(runtimeVersion: string): string {
+  return `Node.js ${normalizeRuntimeVersion(runtimeVersion)}`;
+}
+
+function summarizeBody(bodyText: string | undefined): string {
+  if (!bodyText) {
+    return "";
+  }
+  const compact = bodyText.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "";
+  }
+  const truncated = compact.length > 600 ? `${compact.slice(0, 600)}...` : compact;
+  return ` Body=${truncated}`;
+}
+
+function createCorrelationId(): string {
+  return generateId().replace(/-/g, "");
+}
+
+function buildPayloadJson(event: DurableStackEvent): string {
+  return JSON.stringify({
+    message: event.message,
+    errorType: event.errorType,
+    errorMessage: event.errorMessage,
+    errorDetail: event.errorDetail,
+    durationMs: event.durationMs,
+    retryAtUtc: event.retryAtUtc,
+    traceId: event.traceId,
+    spanId: event.spanId
+  });
+}
 
 function toTelemetryEventDto(event: DurableStackEvent): TelemetryEventDto {
   return {
@@ -22,8 +65,64 @@ function toTelemetryEventDto(event: DurableStackEvent): TelemetryEventDto {
     durationMs: event.durationMs,
     errorType: event.errorType,
     errorMessage: event.errorMessage,
-    payloadJson: event.message
+    payloadJson: buildPayloadJson(event)
   };
+}
+
+function getLatestEvent(events: DurableStackEvent[]): DurableStackEvent {
+  return events.reduce((latest, current) =>
+    Date.parse(current.occurredAtUtc) > Date.parse(latest.occurredAtUtc) ? current : latest
+  );
+}
+
+function getEarliestEvent(events: DurableStackEvent[]): DurableStackEvent {
+  return events.reduce((earliest, current) =>
+    Date.parse(current.occurredAtUtc) < Date.parse(earliest.occurredAtUtc) ? current : earliest
+  );
+}
+
+function buildTelemetryEvents(
+  events: DurableStackEvent[],
+  runtimeName: string,
+  runtimeVersion: string
+): TelemetryEventDto[] {
+  const list: TelemetryEventDto[] = [];
+  const heartbeatEvents: DurableStackEvent[] = [];
+
+  for (const event of events) {
+    if (event.eventType === EVENT_TYPES.WORKER_HEARTBEAT) {
+      heartbeatEvents.push(event);
+      continue;
+    }
+
+    list.push({
+      ...toTelemetryEventDto(event),
+      runtime: runtimeName,
+      runtimeVersion
+    });
+  }
+
+  if (heartbeatEvents.length > 0) {
+    const latest = getLatestEvent(heartbeatEvents);
+    const earliest = getEarliestEvent(heartbeatEvents);
+    const heartbeatPayload = JSON.stringify({
+      heartbeatCount: heartbeatEvents.length,
+      firstHeartbeatAtUtc: earliest.occurredAtUtc,
+      lastHeartbeatAtUtc: latest.occurredAtUtc
+    });
+
+    list.push({
+      eventType: "worker_heartbeat_batch",
+      eventVersion: latest.eventVersion,
+      occurredAtUtc: latest.occurredAtUtc,
+      workerName: latest.workerName,
+      runtime: runtimeName,
+      runtimeVersion,
+      payloadJson: heartbeatPayload
+    });
+  }
+
+  return list;
 }
 
 function buildIdempotencyKey(workerName: string, sequence: number): string {
@@ -57,14 +156,20 @@ export class IngestionEventSyncService {
   private sequence = 0;
   private loopPromise: Promise<void> | undefined;
   private abortController: AbortController | undefined;
+  private readonly runtimeVersion: string;
 
   public constructor(
     private readonly sink: IngestionDurableStackEventSink,
     private readonly options: NormalizedDurableStackOptions,
     private readonly httpPost: HttpPost = defaultHttpPost,
-    private readonly runtimeName = "Node.js",
-    private readonly runtimeVersion = process.version
-  ) {}
+    runtimeName: string | undefined = undefined,
+    runtimeVersion = process.version
+  ) {
+    this.runtimeName = (runtimeName && runtimeName.trim()) ? runtimeName.trim() : defaultRuntimeName(runtimeVersion);
+    this.runtimeVersion = normalizeRuntimeVersion(runtimeVersion);
+  }
+
+  private readonly runtimeName: string;
 
   public start(): void {
     if (this.running) {
@@ -79,9 +184,23 @@ export class IngestionEventSyncService {
     this.abortController = new AbortController();
 
     this.loopPromise = (async () => {
+      const initialDelayMs = Math.max(0, Math.floor(randomJittered(
+        Math.max(0.1, this.options.eventing.ingestionFlushIntervalSeconds),
+        this.options.eventing.ingestionSyncJitterEnabled,
+        this.options.eventing.ingestionSyncJitterRatio
+      ) * 1000));
+      if (initialDelayMs > 0) {
+        await sleep(initialDelayMs);
+      }
+
       while (this.running && this.abortController && !this.abortController.signal.aborted) {
         await this.flushOnce(this.abortController.signal);
-        await sleep(Math.max(1, this.options.eventing.ingestionFlushIntervalSeconds) * 1000);
+        const loopDelayMs = Math.max(0, Math.floor(randomJittered(
+          Math.max(0.1, this.options.eventing.ingestionFlushIntervalSeconds),
+          this.options.eventing.ingestionSyncJitterEnabled,
+          this.options.eventing.ingestionSyncJitterRatio
+        ) * 1000));
+        await sleep(loopDelayMs);
       }
     })();
   }
@@ -113,11 +232,7 @@ export class IngestionEventSyncService {
       tenantId: this.options.eventing.tenantId,
       idempotencyKey,
       serviceName: this.options.eventing.serviceName,
-      events: batch.map((event) => ({
-        ...toTelemetryEventDto(event),
-        runtime: this.runtimeName,
-        runtimeVersion: this.runtimeVersion
-      }))
+      events: buildTelemetryEvents(batch, this.runtimeName, this.runtimeVersion)
     };
 
     const json = JSON.stringify(payload);
@@ -138,7 +253,7 @@ export class IngestionEventSyncService {
             Accept: "application/json",
             "X-DurableStack-TenantId": this.options.eventing.tenantId,
             "X-DurableStack-ClientSecret": this.options.eventing.clientSecret,
-            "X-Correlation-Id": `${this.options.workerName}:${Date.now()}`
+            "X-Correlation-Id": createCorrelationId()
           },
           body: json
         }, signal);
@@ -155,10 +270,22 @@ export class IngestionEventSyncService {
       }
 
       if (response.status === 401 || response.status === 403) {
+        console.warn(
+          `DurableStack ingestion sync authorization failed with status ${response.status}.${summarizeBody(response.bodyText)}`
+        );
         return;
       }
 
       if (!isTransientStatus(response.status) || attempt >= maxAttempts) {
+        if (!isTransientStatus(response.status)) {
+          console.warn(
+            `DurableStack ingestion sync rejected without retry. Status=${response.status}.${summarizeBody(response.bodyText)}`
+          );
+        } else {
+          console.warn(
+            `DurableStack ingestion sync failed after retries. Status=${response.status}.${summarizeBody(response.bodyText)}`
+          );
+        }
         return;
       }
 

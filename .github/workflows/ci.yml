@@ -69,6 +69,189 @@ jobs:
         run: npm run typecheck
 
       - name: Test (Postgres enabled)
+        id: postgres_tests
+        continue-on-error: true
         env:
           DURABLESTACK_TEST_POSTGRES: "postgresql://postgres:durablestack_ci@localhost:5432/durable_stack"
-        run: npm test
+        run: set -o pipefail && npm test 2>&1 | tee postgres-test-output.log
+
+      - name: Upload Postgres test output artifact (on failure)
+        if: ${{ steps.postgres_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-test-output
+          path: postgres-test-output.log
+          if-no-files-found: ignore
+
+      - name: Show Postgres test log tail (on failure)
+        if: ${{ steps.postgres_tests.outcome != 'success' }}
+        run: tail -n 200 postgres-test-output.log || true
+
+      - name: Fail job if Postgres tests failed
+        if: ${{ steps.postgres_tests.outcome != 'success' }}
+        run: exit 1
+
+  mysql-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: durablestack_ci
+          MYSQL_DATABASE: durable_stack
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdurablestack_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (MySQL enabled)
+        id: mysql_tests
+        continue-on-error: true
+        env:
+          DURABLESTACK_TEST_MYSQL: "mysql://root:durablestack_ci@127.0.0.1:3306/durable_stack"
+        run: set -o pipefail && npm test 2>&1 | tee mysql-test-output.log
+
+      - name: Dump migration lock state (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        env:
+          MYSQL_PWD: durablestack_ci
+        run: mysql -h 127.0.0.1 -uroot -D durable_stack -e "select is_used_lock('durablestack_migrate_default') as default_lock; show processlist;" > mysql-lock-diagnostics.log || true
+
+      - name: Upload MySQL test output artifact (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-test-output
+          path: |
+            mysql-test-output.log
+            mysql-lock-diagnostics.log
+          if-no-files-found: ignore
+
+      - name: Show MySQL test log tail (on failure)
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        run: tail -n 200 mysql-test-output.log || true
+
+      - name: Fail job if MySQL tests failed
+        if: ${{ steps.mysql_tests.outcome != 'success' }}
+        run: exit 1
+
+  sqlserver-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "DurableStack_ci123!"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P DurableStack_ci123! -Q 'select 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (SQL Server enabled)
+        id: sqlserver_tests
+        continue-on-error: true
+        env:
+          DURABLESTACK_TEST_SQLSERVER: "Server=127.0.0.1,1433;User Id=sa;Password=DurableStack_ci123!;Database=master;Encrypt=false;TrustServerCertificate=true"
+        run: set -o pipefail && npm test 2>&1 | tee sqlserver-test-output.log
+
+      - name: Upload SQL Server test output artifact (on failure)
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlserver-test-output
+          path: sqlserver-test-output.log
+          if-no-files-found: ignore
+
+      - name: Show SQL Server test log tail (on failure)
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        run: tail -n 200 sqlserver-test-output.log || true
+
+      - name: Fail job if SQL Server tests failed
+        if: ${{ steps.sqlserver_tests.outcome != 'success' }}
+        run: exit 1
+
+  sqlite-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (SQLite enabled)
+        id: sqlite_tests
+        continue-on-error: true
+        env:
+          DURABLESTACK_TEST_SQLITE: "1"
+        run: set -o pipefail && npm test 2>&1 | tee sqlite-test-output.log
+
+      - name: Upload SQLite test output artifact (on failure)
+        if: ${{ steps.sqlite_tests.outcome != 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-test-output
+          path: sqlite-test-output.log
+          if-no-files-found: ignore
+
+      - name: Show SQLite test log tail (on failure)
+        if: ${{ steps.sqlite_tests.outcome != 'success' }}
+        run: tail -n 200 sqlite-test-output.log || true
+
+      - name: Fail job if SQLite tests failed
+        if: ${{ steps.sqlite_tests.outcome != 'success' }}
+        run: exit 1

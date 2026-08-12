@@ -1,53 +1,24 @@
-# DurableStack Node.js
+# DurableStack (Node.js)
 
-This repository currently contains the Phase 0 and Phase 1 foundation for the DurableStack Node.js runtime:
+**Run durable background jobs in Node.js using the database you already have.**
 
-- core runtime contracts and constants,
-- external payload validators for telemetry/runtime-control shapes,
-- in-memory runtime implementation with explicit job registration,
-- worker processing loop with leasing, retries, recurring scheduling, and retention.
+DurableStack provides recurring scheduling, retries, distributed execution, and worker observability **without requiring Redis, RabbitMQ, or additional queue infrastructure**.
 
-## Current status
+## Why DurableStack?
 
-- Implemented now:
-  - explicit `registerJob` and `registerRecurring`
-  - enqueue/schedule APIs
-  - recurring schedule admin APIs
-  - query APIs
-  - in-memory store semantics (pending/leased/succeeded/failed)
-  - lease heartbeat extension and completion fencing
-  - event emission model with core event types
-- Deferred to later phases:
-  - job auto-discovery
-  - MySQL/SQL Server/SQLite providers
-  - framework adapters and convenience bundle package
+- **Database-native execution** — Use PostgreSQL, MySQL, SQL Server, or SQLite as the coordination layer.
+- **Distributed-safe by default** — Lease-based claiming, heartbeats, and safe reclaim on failure.
+- **Production observability** — OpenTelemetry-style event sinks plus optional hosted observability integration.
+- **Cross-runtime direction** — Node.js runtime aligned to the same external contract semantics as the .NET runtime.
 
-## Phase 3 (in progress)
+## Quick Start
 
-- Hosted observability scaffolding added:
-  - ingestion event sink queue and sync service,
-  - runtime-control sync service and command processor,
-  - tests for ingestion headers/payloads and runtime-control command flow.
-- Runtime hardening added:
-  - hosted ingestion sync and runtime-control sync now auto-start/stop with runtime lifecycle when tenant credentials are configured.
-
-## Phase 2 (completed)
-
-- PostgreSQL provider foundation has been added with:
-  - table naming resolver,
-  - baseline idempotent migration,
-  - Postgres `DurableJobStore` implementation,
-  - Postgres contract/integration tests (env-gated locally),
-  - CI Postgres service job that executes Postgres tests automatically.
-
-Use env var `DURABLESTACK_TEST_POSTGRES` to enable Postgres integration tests locally/CI.
-
-Phase 2 completion details are documented in `PHASE-2-COMPLETION.md`.
-
-## Quick start
+```bash
+npm install durablestack
+```
 
 ```ts
-import { createDurableStack } from "./src/index.js";
+import { createDurableStack } from "durablestack";
 
 const runtime = createDurableStack({
   workerName: "node-worker-1",
@@ -63,15 +34,35 @@ const runId = await runtime.enqueue("send-email", { userId: 123 });
 console.log({ runId });
 ```
 
-## Development
+## Key Features
 
-```bash
-npm install
-npm run typecheck
-npm run test
-```
+- Durable one-off, delayed, and recurring (cron) jobs with timezone support.
+- Retry policies, terminal failure handling, and distributed worker coordination.
+- Multi-provider support (PostgreSQL, MySQL, SQL Server, SQLite, InMemory).
+- Runtime command control receipt lifecycle for schedule operations.
+- Hosted observability/eventing integration plus custom sink support.
+- Job autodiscovery (opt-in) with strict or best-effort startup modes.
 
-## Docs
+## Runtime Command Control
 
-- Architecture and phase notes: `ARCHITECTURE.md`
+When hosted eventing/runtime-control credentials are configured, runtimes can sync and process runtime-control commands.
+
+- Run schedule now
+- Pause/resume schedule
+- Update cron and time zone
+
+## Getting Started
+
+- Architecture notes: `ARCHITECTURE.md`
 - Contract definitions: `CONTRACTS.md`
+- Contributing guide: `CONTRIBUTING.md`
+- Security policy: `SECURITY.md`
+
+## Status
+
+Current focus is prerelease hardening and packaging for real-world testing.
+
+---
+
+**License**: MIT
+**Contributing**: See `CONTRIBUTING.md`

@@ -9,8 +9,44 @@ import type {
   RecurringJobState
 } from "../types.js";
 import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
-import { nowIso, sleep } from "../utils.js";
+import { generateId, nowIso, randomJittered, sleep } from "../utils.js";
 import { validateRuntimeCommandEnvelopeDto, validateRuntimeControlSyncRequest } from "../validators.js";
+
+function computeBackoffDelayMs(attempt: number): number {
+  const bounded = Math.max(1, attempt);
+  const base = Math.min(30_000, 500 * Math.pow(2, Math.max(0, bounded - 1)));
+  const jitter = Math.floor(Math.random() * 250);
+  return base + jitter;
+}
+
+function normalizeRuntimeVersion(value: string): string {
+  const trimmed = (value || "").trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+
+  return trimmed.replace(/^v/i, "");
+}
+
+function defaultRuntimeName(runtimeVersion: string): string {
+  return `Node.js ${normalizeRuntimeVersion(runtimeVersion)}`;
+}
+
+function summarizeBody(bodyText: string | undefined): string {
+  if (!bodyText) {
+    return "";
+  }
+  const compact = bodyText.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "";
+  }
+  const truncated = compact.length > 600 ? `${compact.slice(0, 600)}...` : compact;
+  return ` Body=${truncated}`;
+}
+
+function createCorrelationId(): string {
+  return generateId().replace(/-/g, "");
+}
 
 export interface RuntimeControlAdmin {
   listScheduledJobs(includeDisabled: boolean): Promise<RecurringJobState[]>;
@@ -49,15 +85,21 @@ export class RuntimeControlSyncService {
   private running = false;
   private loopPromise: Promise<void> | undefined;
   private abortController: AbortController | undefined;
+  private readonly runtimeVersion: string;
 
   public constructor(
     private readonly store: DurableJobStore,
     private readonly admin: RuntimeControlAdmin,
     private readonly options: NormalizedDurableStackOptions,
     private readonly httpPost: HttpPost = defaultHttpPost,
-    private readonly runtimeName = "Node.js",
-    private readonly runtimeVersion = process.version
-  ) {}
+    runtimeName: string | undefined = undefined,
+    runtimeVersion = process.version
+  ) {
+    this.runtimeName = (runtimeName && runtimeName.trim()) ? runtimeName.trim() : defaultRuntimeName(runtimeVersion);
+    this.runtimeVersion = normalizeRuntimeVersion(runtimeVersion);
+  }
+
+  private readonly runtimeName: string;
 
   public start(): void {
     if (this.running) {
@@ -76,9 +118,29 @@ export class RuntimeControlSyncService {
     this.abortController = new AbortController();
 
     this.loopPromise = (async () => {
+      const initialDelayMs = Math.max(0, Math.floor(randomJittered(
+        Math.max(0.1, this.options.eventing.runtimeControlSyncIntervalSeconds),
+        this.options.eventing.runtimeControlSyncJitterEnabled,
+        this.options.eventing.runtimeControlSyncJitterRatio
+      ) * 1000));
+      if (initialDelayMs > 0) {
+        await sleep(initialDelayMs);
+      }
+
       while (this.running && this.abortController && !this.abortController.signal.aborted) {
-        await this.syncOnce(this.abortController.signal);
-        await sleep(Math.max(1, this.options.eventing.runtimeControlSyncIntervalSeconds) * 1000);
+        try {
+          await this.syncOnce(this.abortController.signal);
+        } catch (error) {
+          const message = error instanceof Error ? error.stack ?? error.message : String(error);
+          console.warn(`DurableStack runtime control sync cycle failed. Worker=${this.options.workerName}. ${message}`);
+          await sleep(2_000);
+        }
+        const loopDelayMs = Math.max(0, Math.floor(randomJittered(
+          Math.max(0.1, this.options.eventing.runtimeControlSyncIntervalSeconds),
+          this.options.eventing.runtimeControlSyncJitterEnabled,
+          this.options.eventing.runtimeControlSyncJitterRatio
+        ) * 1000));
+        await sleep(loopDelayMs);
       }
     })();
   }
@@ -117,6 +179,9 @@ export class RuntimeControlSyncService {
 
     const endpoint = new URL(this.options.eventing.runtimeControlSyncPath, this.options.eventing.ingestionApiBaseUrl).toString();
     const payload = JSON.stringify(request);
+    if (process.env.DURABLESTACK_RUNTIME_CONTROL_DEBUG_PAYLOAD === "1") {
+      console.warn(`DurableStack runtime control request payload: ${payload}`);
+    }
     const maxAttempts = Math.max(1, Math.min(10, this.options.eventing.ingestionMaxRetryAttempts));
 
     let responseBody: string | undefined;
@@ -130,15 +195,16 @@ export class RuntimeControlSyncService {
             Accept: "application/json",
             "X-DurableStack-TenantId": this.options.eventing.tenantId,
             "X-DurableStack-ClientSecret": this.options.eventing.clientSecret,
-            "X-Correlation-Id": `${this.options.workerName}:${Date.now()}`
+            "X-Correlation-Id": createCorrelationId()
           },
           body: payload
         }, signal);
       } catch {
         if (attempt >= maxAttempts) {
+          console.warn("DurableStack runtime control sync failed after retries due to request error.");
           return;
         }
-        await sleep(Math.min(10, attempt) * 200);
+        await sleep(computeBackoffDelayMs(attempt));
         continue;
       }
 
@@ -148,14 +214,26 @@ export class RuntimeControlSyncService {
       }
 
       if (response.status === 401 || response.status === 403) {
+        console.warn(
+          `DurableStack runtime control sync authorization failed with status ${response.status}.${summarizeBody(response.bodyText)}`
+        );
         return;
       }
 
       if (!isTransientStatus(response.status) || attempt >= maxAttempts) {
+        if (!isTransientStatus(response.status)) {
+          console.warn(
+            `DurableStack runtime control sync rejected without retry. Status=${response.status}. Worker=${request.workerName ?? "unknown"} Runtime=${request.runtime ?? "unknown"} RuntimeVersion=${request.runtimeVersion ?? "unknown"} SnapshotItems=${request.snapshotItems.length} Receipts=${request.receipts.length}.${summarizeBody(response.bodyText)}`
+          );
+        } else {
+          console.warn(
+            `DurableStack runtime control sync failed after retries. Status=${response.status}. Worker=${request.workerName ?? "unknown"} Runtime=${request.runtime ?? "unknown"} RuntimeVersion=${request.runtimeVersion ?? "unknown"} SnapshotItems=${request.snapshotItems.length} Receipts=${request.receipts.length}.${summarizeBody(response.bodyText)}`
+          );
+        }
         return;
       }
 
-      await sleep(Math.min(10, attempt) * 200);
+      await sleep(computeBackoffDelayMs(attempt));
     }
 
     if (!responseBody) {
@@ -176,7 +254,11 @@ export class RuntimeControlSyncService {
 
   public async processCommands(commands: RuntimeCommandEnvelopeDto[], _signal: AbortSignal): Promise<void> {
     for (const command of commands) {
-      validateRuntimeCommandEnvelopeDto(command);
+      try {
+        validateRuntimeCommandEnvelopeDto(command);
+      } catch {
+        continue;
+      }
 
       const commandId = command.commandId.trim();
       if (!commandId) {
@@ -238,37 +320,75 @@ export class RuntimeControlSyncService {
     | { success: true; runId?: string }
     | { success: false; errorCode: string; errorMessage: string }
   > {
-    const payload = JSON.parse(command.payloadJson || "{}");
+    const commandType = command.commandType.trim();
+    if (!commandType) {
+      return { success: false, errorCode: "invalid_command_type", errorMessage: "CommandType is required." };
+    }
 
-    switch (command.commandType) {
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(command.payloadJson || "{}");
+      payload = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
+    } catch {
+      payload = {};
+    }
+
+    const payloadString = (camelKey: string, pascalKey: string): string | undefined => {
+      const camelValue = payload[camelKey];
+      if (typeof camelValue === "string") {
+        return camelValue;
+      }
+      const pascalValue = payload[pascalKey];
+      if (typeof pascalValue === "string") {
+        return pascalValue;
+      }
+      return undefined;
+    };
+
+    const payloadBoolean = (camelKey: string, pascalKey: string): boolean | undefined => {
+      const camelValue = payload[camelKey];
+      if (typeof camelValue === "boolean") {
+        return camelValue;
+      }
+      const pascalValue = payload[pascalKey];
+      if (typeof pascalValue === "boolean") {
+        return pascalValue;
+      }
+      return undefined;
+    };
+
+    switch (commandType) {
       case "set_schedule_enabled": {
-        if (!payload || typeof payload.jobName !== "string" || typeof payload.enabled !== "boolean") {
+        const jobName = payloadString("jobName", "JobName");
+        const enabled = payloadBoolean("enabled", "Enabled");
+        if (!jobName || typeof enabled !== "boolean") {
           return { success: false, errorCode: "invalid_payload", errorMessage: "Payload must include jobName and enabled." };
         }
 
-        const updated = await this.admin.setScheduledJobEnabled(payload.jobName.trim(), payload.enabled);
+        const normalizedJobName = jobName.trim();
+        const updated = await this.admin.setScheduledJobEnabled(normalizedJobName, enabled);
         return updated
           ? { success: true }
-          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${payload.jobName.trim()}' was not found.` };
+          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${normalizedJobName}' was not found.` };
       }
 
       case "run_schedule_now": {
-        if (!payload || typeof payload.jobName !== "string") {
+        const jobName = payloadString("jobName", "JobName");
+        if (!jobName) {
           return { success: false, errorCode: "invalid_payload", errorMessage: "Payload must include jobName." };
         }
-        const runId = await this.admin.runScheduledJobNow(payload.jobName.trim());
+        const normalizedJobName = jobName.trim();
+        const runId = await this.admin.runScheduledJobNow(normalizedJobName);
         return runId
           ? { success: true, runId }
-          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${payload.jobName.trim()}' was not found.` };
+          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${normalizedJobName}' was not found.` };
       }
 
       case "update_schedule_cron": {
-        if (
-          !payload ||
-          typeof payload.jobName !== "string" ||
-          typeof payload.cronExpression !== "string" ||
-          typeof payload.timeZone !== "string"
-        ) {
+        const jobName = payloadString("jobName", "JobName");
+        const cronExpression = payloadString("cronExpression", "CronExpression");
+        const timeZone = payloadString("timeZone", "TimeZone");
+        if (!jobName || !cronExpression || !timeZone) {
           return {
             success: false,
             errorCode: "invalid_payload",
@@ -277,31 +397,52 @@ export class RuntimeControlSyncService {
         }
 
         const updated = await this.admin.updateScheduledJobCron(
-          payload.jobName.trim(),
-          payload.cronExpression.trim(),
-          payload.timeZone.trim()
+          jobName.trim(),
+          cronExpression.trim(),
+          timeZone.trim()
         );
         return updated
           ? { success: true }
-          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${payload.jobName.trim()}' was not found.` };
+          : { success: false, errorCode: "schedule_not_found", errorMessage: `Scheduled job '${jobName.trim()}' was not found.` };
       }
 
       default:
         return {
           success: false,
           errorCode: "unsupported_command_type",
-          errorMessage: `Unsupported command type '${command.commandType}'.`
+          errorMessage: `Unsupported command type '${commandType}'.`
         };
     }
   }
 
   public static parseResponse(json: string): RuntimeControlSyncResponse | undefined {
     try {
-      const parsed = JSON.parse(json) as RuntimeControlSyncResponse;
-      if (!Array.isArray(parsed.commands)) {
-        return undefined;
-      }
-      return parsed;
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      const commandsCandidate = parsed.commands ?? parsed.Commands;
+      const commands = Array.isArray(commandsCandidate) ? commandsCandidate.map((item) => {
+        if (!item || typeof item !== "object") {
+          return item;
+        }
+        const command = item as Record<string, unknown>;
+        return {
+          commandId: String(command.commandId ?? command.CommandId ?? ""),
+          commandType: String(command.commandType ?? command.CommandType ?? ""),
+          payloadJson: String(command.payloadJson ?? command.PayloadJson ?? "{}"),
+          issuedAtUtc: String(command.issuedAtUtc ?? command.IssuedAtUtc ?? nowIso()),
+          expiresAtUtc: typeof (command.expiresAtUtc ?? command.ExpiresAtUtc) === "string"
+            ? String(command.expiresAtUtc ?? command.ExpiresAtUtc)
+            : undefined
+        } satisfies RuntimeCommandEnvelopeDto;
+      }) : [];
+      const serverTimeUtc = parsed.serverTimeUtc ?? parsed.ServerTimeUtc;
+      const errorCode = parsed.errorCode ?? parsed.ErrorCode;
+      const errorMessage = parsed.errorMessage ?? parsed.ErrorMessage;
+      return {
+        serverTimeUtc: typeof serverTimeUtc === "string" ? serverTimeUtc : nowIso(),
+        commands,
+        errorCode: typeof errorCode === "string" ? errorCode : undefined,
+        errorMessage: typeof errorMessage === "string" ? errorMessage : undefined
+      };
     } catch {
       return undefined;
     }

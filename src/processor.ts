@@ -5,6 +5,27 @@ import { DurableJobRegistry } from "./registry.js";
 import type { DurableJobStore, DurableStackEvent, DurableStackEventSink, JobRunRecord, NormalizedDurableStackOptions } from "./types.js";
 import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse } from "./utils.js";
 
+function truncateText(value: string, maxLength: number): string {
+  if (maxLength <= 0) {
+    return "";
+  }
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function getErrorDetail(error: unknown): string | undefined {
+  if (error instanceof Error && typeof error.stack === "string" && error.stack.trim().length > 0) {
+    return error.stack;
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return undefined;
+  }
+}
+
 export class DurableStackProcessor {
   private readonly inFlight = new Set<Promise<void>>();
   private nextRetentionSweepAtUtc = "1970-01-01T00:00:00.000Z";
@@ -18,14 +39,32 @@ export class DurableStackProcessor {
 
   public async initializeRecurringJobs(): Promise<void> {
     const now = nowIso();
-    for (const registration of this.registry.getAll()) {
+    const registeredRecurring = this.registry.getAll().filter((x) => Boolean(x.recurring));
+    const existing = await this.store.getRecurringJobs(true);
+    const existingByName = new Map(existing.map((x) => [x.jobName, x]));
+
+    for (const registration of registeredRecurring) {
       if (!registration.recurring) {
         continue;
       }
 
       validateIanaTimeZone(registration.recurring.timeZone);
+      const current = existingByName.get(registration.jobName);
+      if (current && this.options.recurring.registrationSync.existingJobBehavior === "KeepDatabase") {
+        continue;
+      }
+
       const next = getNextOccurrenceUtc(registration.recurring.cronExpression, registration.recurring.timeZone, now);
       await this.store.upsertRecurringJob(registration, next);
+    }
+
+    if (this.options.recurring.registrationSync.orphanedJobBehavior === "Disable") {
+      const registeredNames = new Set(registeredRecurring.map((x) => x.jobName));
+      for (const row of existing) {
+        if (!registeredNames.has(row.jobName) && row.enabled) {
+          await this.store.setRecurringJobEnabled(row.jobName, false, undefined);
+        }
+      }
     }
   }
 
@@ -148,8 +187,36 @@ export class DurableStackProcessor {
       workerName: this.options.workerName
     });
 
+    const localAbort = new AbortController();
+    const combinedAbort = new AbortController();
+
+    const propagateAbort = () => {
+      if (!combinedAbort.signal.aborted) {
+        combinedAbort.abort();
+      }
+    };
+
+    const signalAbortListener = () => propagateAbort();
+    signal.addEventListener("abort", signalAbortListener, { once: true });
+    localAbort.signal.addEventListener("abort", propagateAbort, { once: true });
+    if (signal.aborted) {
+      propagateAbort();
+    }
+
+    let leaseLost = false;
     const heartbeatHandle = setInterval(() => {
-      void this.store.extendLease(run.id, this.options.workerName, this.options.leaseDurationSeconds);
+      void (async () => {
+        try {
+          const extended = await this.store.extendLease(run.id, this.options.workerName, this.options.leaseDurationSeconds);
+          if (!extended) {
+            leaseLost = true;
+            localAbort.abort();
+          }
+        } catch {
+          leaseLost = true;
+          localAbort.abort();
+        }
+      })();
     }, Math.max(250, Math.floor(this.options.leaseDurationSeconds * 500)));
 
     try {
@@ -159,7 +226,11 @@ export class DurableStackProcessor {
         jobName: run.jobName,
         attempt: run.attempt,
         workerName: this.options.workerName
-      }, signal);
+      }, combinedAbort.signal);
+
+      if (leaseLost || combinedAbort.signal.aborted) {
+        return;
+      }
 
       const recorded = await this.store.markSucceeded(run.id, this.options.workerName);
       if (recorded) {
@@ -177,12 +248,26 @@ export class DurableStackProcessor {
         });
       }
     } catch (error) {
+      if (signal.aborted && combinedAbort.signal.aborted && !leaseLost) {
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Unknown job failure";
+      const errorDetail = this.options.eventing.includeErrorDetail
+        ? truncateText(getErrorDetail(error) ?? message, Math.max(1, this.options.eventing.maxErrorDetailLength))
+        : undefined;
       const shouldRetry = run.attempt < run.maxAttempts;
-      const delayBase = this.options.retryDelaySeconds;
+      const retryBehavior = registration.retryBehavior ?? registration.recurring?.retryBehavior ?? "backoff";
+      const initialDelay = registration.retryInitialDelaySeconds
+        ?? registration.recurring?.retryInitialDelaySeconds
+        ?? this.options.retryDelaySeconds;
+      const delayBase = Math.max(1, initialDelay);
+      const retrySeconds = retryBehavior === "fixed"
+        ? delayBase
+        : Math.min(this.options.retryMaxDelaySeconds, delayBase * Math.pow(2, Math.max(0, run.attempt - 1)));
       const retryDelay = shouldRetry
         ? randomJittered(
-            Math.min(this.options.retryMaxDelaySeconds, delayBase * Math.pow(2, Math.max(0, run.attempt - 1))),
+            retrySeconds,
             this.options.retryJitterEnabled,
             this.options.retryJitterRatio)
         : 0;
@@ -202,6 +287,7 @@ export class DurableStackProcessor {
           workerName: this.options.workerName,
           errorType: error instanceof Error ? error.name : "Error",
           errorMessage: message,
+          errorDetail,
           durationMs: Date.now() - started,
           retryAtUtc
         });
@@ -236,6 +322,7 @@ export class DurableStackProcessor {
       }
     } finally {
       clearInterval(heartbeatHandle);
+      signal.removeEventListener("abort", signalAbortListener);
     }
   }
 
