@@ -14,11 +14,11 @@ DurableStack provides recurring scheduling, retries, distributed execution, and 
 ## Quick Start
 
 ```bash
-npm install durablestack-nodejs
+npm install durablestack
 ```
 
 ```ts
-import { createDurableStack } from "durablestack-nodejs";
+import { createDurableStack } from "durablestack";
 
 const runtime = createDurableStack({
   workerName: "node-worker-1",
@@ -51,25 +51,6 @@ When hosted eventing/runtime-control credentials are configured, runtimes can sy
 - Pause/resume schedule
 - Update cron and time zone
 
-## Provider Test Envs
-
-Use these environment variables to enable provider-specific tests locally or in CI:
-
-- `DURABLESTACK_TEST_POSTGRES`
-- `DURABLESTACK_TEST_MYSQL`
-- `DURABLESTACK_TEST_SQLSERVER`
-- `DURABLESTACK_TEST_SQLITE`
-
-Note: SQLite relies on Node built-in `node:sqlite`. In runtimes where it is unavailable, SQLite tests are skipped.
-
-## Development
-
-```bash
-npm install
-npm run typecheck
-npm run test
-```
-
 ## Getting Started
 
 - Architecture notes: `ARCHITECTURE.md`
@@ -78,8 +59,6 @@ npm run test
 - Security policy: `SECURITY.md`
 
 ## Status
-
-Phase 5 provider parity is complete for Node.js (PostgreSQL, MySQL, SQL Server, SQLite, and InMemory).
 
 Current focus is prerelease hardening and packaging for real-world testing.
 

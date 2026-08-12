@@ -700,6 +700,127 @@ test("runtime control sync does not upload leased-only receipts", async () => {
   assert.equal(leaseCanBeRetaken, false);
 });
 
+test("runtime control sync sends normalized runtime version without leading v", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: async () => [],
+    setScheduledJobEnabled: async () => true,
+    updateScheduledJobCron: async () => true,
+    runScheduledJobNow: async () => "run-1"
+  };
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync",
+      runtimeControlSyncIntervalSeconds: 5,
+      runtimeControlCommandLeaseDurationSeconds: 30,
+      runtimeControlMaxReceiptUpload: 200
+    }
+  });
+
+  let capturedBody = "";
+  const service = new RuntimeControlSyncService(
+    store,
+    admin,
+    options,
+    async (request) => {
+      capturedBody = request.body;
+      return {
+        status: 200,
+        bodyText: JSON.stringify({
+          serverTimeUtc: new Date().toISOString(),
+          commands: []
+        })
+      };
+    },
+    "Node.js",
+    "v20.18.0"
+  );
+
+  await service.syncOnce(new AbortController().signal);
+
+  const payload = JSON.parse(capturedBody);
+  assert.equal(payload.runtime, "Node.js");
+  assert.equal(payload.runtimeVersion, "20.18.0");
+});
+
+test("runtime control sync processes PascalCase command payload fields", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  const registration = {
+    jobName: "recurring-a",
+    jobType: "recurring-a",
+    maxAttempts: 3,
+    handler: async () => {},
+    recurring: {
+      cronExpression: "*/1 * * * *",
+      timeZone: "UTC",
+      enabled: true,
+      allowConcurrentRuns: false
+    }
+  };
+
+  await store.upsertRecurringJob(registration, new Date(Date.now() + 60_000).toISOString());
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: (includeDisabled) => store.getRecurringJobs(includeDisabled),
+    setScheduledJobEnabled: (jobName, enabled) => store.setRecurringJobEnabled(jobName, enabled, undefined),
+    updateScheduledJobCron: (jobName, cronExpression, timeZone) =>
+      store.updateRecurringJobSchedule(jobName, cronExpression, timeZone, new Date(Date.now() + 60_000).toISOString()),
+    runScheduledJobNow: (jobName) => store.tryEnqueueIfNoActiveRun(jobName, jobName, undefined, new Date().toISOString(), 3)
+  };
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync",
+      runtimeControlSyncIntervalSeconds: 5,
+      runtimeControlCommandLeaseDurationSeconds: 30,
+      runtimeControlMaxReceiptUpload: 200
+    }
+  });
+
+  const service = new RuntimeControlSyncService(
+    store,
+    admin,
+    options,
+    async () => ({
+      status: 200,
+      bodyText: JSON.stringify({
+        ServerTimeUtc: new Date().toISOString(),
+        Commands: [
+          {
+            CommandId: "cmd-pascal-1",
+            CommandType: "update_schedule_cron",
+            PayloadJson: JSON.stringify({
+              JobName: "recurring-a",
+              CronExpression: "*/2 * * * *",
+              TimeZone: "UTC"
+            }),
+            IssuedAtUtc: new Date().toISOString()
+          }
+        ]
+      })
+    })
+  );
+
+  await service.syncOnce(new AbortController().signal);
+
+  const jobs = await store.getRecurringJobs(true);
+  assert.equal(jobs[0]?.cronExpression, "*/2 * * * *");
+  const receipts = await store.getRuntimeCommandReceipts(10);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.status, "succeeded");
+});
+
 test("runtime start auto-wires hosted sinks/services when credentials are configured", async () => {
   const store = new InMemoryDurableJobStore();
 

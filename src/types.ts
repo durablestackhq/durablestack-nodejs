@@ -115,6 +115,8 @@ export interface RuntimeControlSyncRequest {
 export interface RuntimeControlSyncResponse {
   serverTimeUtc: string;
   commands: RuntimeCommandEnvelopeDto[];
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 export interface TelemetryEventDto {
@@ -208,11 +210,15 @@ export interface DurableStackEventingOptions {
   ingestionMaxRequestBodyBytes?: number;
   ingestionMaxRetryAttempts?: number;
   ingestionFlushIntervalSeconds?: number;
+  ingestionSyncJitterEnabled?: boolean;
+  ingestionSyncJitterRatio?: number;
   includeErrorDetail?: boolean;
   maxErrorDetailLength?: number;
   runtimeControlEnabled?: boolean;
   runtimeControlSyncPath?: string;
   runtimeControlSyncIntervalSeconds?: number;
+  runtimeControlSyncJitterEnabled?: boolean;
+  runtimeControlSyncJitterRatio?: number;
   runtimeControlMaxReceiptUpload?: number;
   runtimeControlCommandLeaseDurationSeconds?: number;
 }

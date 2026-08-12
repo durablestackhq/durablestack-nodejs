@@ -105,7 +105,10 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
       this.runtimeControlSyncService = new RuntimeControlSyncService(
         this.store,
         admin,
-        this.options
+        this.options,
+        undefined,
+        undefined,
+        process.version
       );
     }
 
@@ -250,9 +253,24 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
     }
 
     this.loopPromise = (async () => {
+      const initialDelaySeconds = randomJittered(
+        this.options.pollIntervalSeconds,
+        this.options.pollJitterEnabled,
+        this.options.pollJitterRatio
+      );
+      if (initialDelaySeconds > 0) {
+        await sleep(initialDelaySeconds * 1000);
+      }
+
       while (this.running && this.abortController && !this.abortController.signal.aborted) {
-        await this.processor.processOnce(this.abortController.signal);
-        await this.emitHeartbeat();
+        try {
+          await this.processor.processOnce(this.abortController.signal);
+          await this.emitHeartbeat();
+        } catch (error) {
+          const message = error instanceof Error ? error.stack ?? error.message : String(error);
+          console.warn(`DurableStack processor cycle failed. Worker=${this.options.workerName}. ${message}`);
+          await sleep(2_000);
+        }
 
         const delaySeconds = randomJittered(
           this.options.pollIntervalSeconds,

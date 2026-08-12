@@ -27,11 +27,15 @@ const DEFAULT_EVENTING: Required<DurableStackEventingOptions> = {
   ingestionMaxRequestBodyBytes: 1_000_000,
   ingestionMaxRetryAttempts: 5,
   ingestionFlushIntervalSeconds: 5,
+  ingestionSyncJitterEnabled: true,
+  ingestionSyncJitterRatio: 0.2,
   includeErrorDetail: false,
   maxErrorDetailLength: 4096,
   runtimeControlEnabled: true,
   runtimeControlSyncPath: "/v1/runtime/control/sync",
   runtimeControlSyncIntervalSeconds: 5,
+  runtimeControlSyncJitterEnabled: true,
+  runtimeControlSyncJitterRatio: 0.2,
   runtimeControlMaxReceiptUpload: 200,
   runtimeControlCommandLeaseDurationSeconds: 30
 };
