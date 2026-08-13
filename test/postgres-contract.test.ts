@@ -163,6 +163,38 @@ test("postgres runtime command lease is single-winner under contention (env-gate
   }
 });
 
+test("postgres runtime command receipts in a terminal state cannot be re-leased (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_POSTGRES is not set");
+    return;
+  }
+
+  const store = await createIsolatedStore("it_cmdterm");
+  try {
+    assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30), true);
+    assert.equal(
+      await store.markRuntimeCommandSucceeded("cmd-done", "worker-a", new Date().toISOString(), new Date().toISOString(), undefined),
+      true
+    );
+
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-b", 30),
+      false,
+      "succeeded receipt must not be re-leasable"
+    );
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30),
+      false,
+      "succeeded receipt must not be re-leasable even by the original owner"
+    );
+
+    const receipts = await store.getRuntimeCommandReceipts(10);
+    assert.equal(receipts[0]?.status, "succeeded", "terminal status must be preserved");
+  } finally {
+    await store.close();
+  }
+});
+
 test("postgres enqueue-if-no-active-run deduplicates pending/leased and allows after terminal (env-gated)", async (t) => {
   if (!connectionString) {
     t.skip("DURABLESTACK_TEST_POSTGRES is not set");

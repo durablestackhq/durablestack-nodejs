@@ -400,6 +400,114 @@ test("runtime cancels handler when lease extension fails", async () => {
   assert.notEqual(run?.status, "succeeded");
 });
 
+test("runtime shutdown records success for a run that completes during the drain window", async () => {
+  const store = new InMemoryDurableJobStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 2,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 5
+  });
+
+  let handlerStarted = false;
+  runtime.registerJob("finishes-during-drain", async () => {
+    handlerStarted = true;
+    // Deliberately ignores the abort signal: the work completes on its own
+    // shortly after stop() begins draining.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("finishes-during-drain");
+
+  for (let i = 0; i < 40 && !handlerStarted; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(handlerStarted, true);
+
+  await runtime.stop();
+
+  const afterStop = await runtime.getRun(runId);
+  assert.equal(afterStop?.status, "succeeded", "a run that completed during the drain must be recorded, not re-executed later");
+});
+
+test("runtime stop returns promptly even with a long poll interval", async () => {
+  const runtime = createDurableStack({
+    pollIntervalSeconds: 60,
+    leaseDurationSeconds: 2,
+    shutdownDrainTimeoutSeconds: 1
+  });
+
+  await runtime.start();
+  const started = Date.now();
+  await runtime.stop();
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5_000, `stop() took ${elapsed}ms; the poll-loop sleep must be abort-aware`);
+});
+
+test("runtime shutdown drain timeout is honored for handlers that ignore the abort signal", async () => {
+  const store = new InMemoryDurableJobStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 2,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 1
+  });
+
+  let handlerStarted = false;
+  runtime.registerJob("stubborn", async (_payload, _ctx, signal) => {
+    handlerStarted = true;
+    // Outlives the drain window (would run 30s), settling only when the
+    // post-drain abort fires.
+    await new Promise<void>((resolve) => {
+      const handle = setTimeout(resolve, 30_000);
+      signal.addEventListener("abort", () => {
+        clearTimeout(handle);
+        resolve();
+      }, { once: true });
+    });
+  });
+
+  await runtime.start();
+  await runtime.enqueue("stubborn");
+  for (let i = 0; i < 40 && !handlerStarted; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(handlerStarted, true);
+
+  const started = Date.now();
+  await runtime.stop();
+  const elapsed = Date.now() - started;
+  // ~1s drain timeout, then the abort settles the handler; far below the 30s work.
+  assert.ok(elapsed < 5_000, `stop() took ${elapsed}ms; drain timeout was not honored`);
+});
+
+test("cancelRun cancels pending runs and reports missing runs", async () => {
+  const runtime = createDurableStack({
+    pollIntervalSeconds: 60,
+    leaseDurationSeconds: 2
+  });
+
+  runtime.registerJob("cancellable", async () => {
+    throw new Error("should never run");
+  });
+
+  const runId = await runtime.enqueue("cancellable");
+  const cancelled = await runtime.cancelRun(runId);
+  assert.equal(cancelled, true);
+
+  const run = await runtime.getRun(runId);
+  assert.equal(run?.status, "failed");
+
+  const secondAttempt = await runtime.cancelRun(runId);
+  assert.equal(secondAttempt, false, "a terminal run cannot be cancelled again");
+
+  const missing = await runtime.cancelRun("does-not-exist");
+  assert.equal(missing, false);
+});
+
 test("runtime shutdown does not record failed run for cancellation", async () => {
   const store = new InMemoryDurableJobStore();
   const runtime = createDurableStackWithStore(store, {

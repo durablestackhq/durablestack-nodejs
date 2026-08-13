@@ -73,8 +73,21 @@ export function randomJittered(baseSeconds: number, enabled: boolean, ratio: num
   return Math.max(0.01, baseSeconds + jitter);
 }
 
-export function sleep(ms: number): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(handle);
+      resolve();
+    };
+    const handle = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

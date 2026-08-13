@@ -1,5 +1,6 @@
 import { createPool, type Pool } from "mysql2/promise";
-import { resolveMySqlTableNames } from "./table-names.js";
+import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verification.js";
+import { resolveMySqlTableNames, type MySqlTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
 const MYSQL_IDENTIFIER_MAX_LENGTH = 64;
@@ -17,30 +18,47 @@ function migrationLockName(tablePrefix: string | undefined): string {
 
 export async function migrateMySql(pool: Pool, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveMySqlTableNames(tablePrefix);
+  await applyMySqlMigrations(pool, tablePrefix, tables);
+  await verifyMySqlSchema(pool, tables);
+}
+
+async function verifyMySqlSchema(pool: Pool, tables: MySqlTableNames): Promise<void> {
+  for (const probe of buildSchemaProbes(tables, qi)) {
+    try {
+      await pool.query(probe.sql);
+    } catch (error) {
+      throw createSchemaMismatchError(probe.table, error);
+    }
+  }
+}
+
+async function applyMySqlMigrations(pool: Pool, tablePrefix: string | undefined, tables: MySqlTableNames): Promise<void> {
   const lockName = migrationLockName(tablePrefix);
 
-  const [lockRows] = await pool.query(`select get_lock(?, 30) as acquired`, [lockName]);
-  const acquired = Number((lockRows as Array<{ acquired: unknown }>)[0]?.acquired ?? 0) === 1;
-  if (!acquired) {
-    throw new Error(`Failed to acquire MySQL migration lock '${lockName}'.`);
-  }
-
+  // GET_LOCK is per-connection in MySQL, so the lock must be acquired, held,
+  // and released on a single dedicated connection — never through pool.query.
+  const conn = await pool.getConnection();
   try {
-    await pool.query(`
-      create table if not exists ${qi(tables.migrations)} (
-        version int primary key,
-        applied_at_utc datetime(3) not null
-      ) engine=InnoDB;
-    `);
-
-    const [existing] = await pool.query(`select version from ${qi(tables.migrations)} where version = ?`, [SCHEMA_VERSION]);
-    const existingRows = existing as Array<{ version: number }>;
-    if (existingRows.length > 0) {
-      return;
+    const [lockRows] = await conn.query(`select get_lock(?, 30) as acquired`, [lockName]);
+    const acquired = Number((lockRows as Array<{ acquired: unknown }>)[0]?.acquired ?? 0) === 1;
+    if (!acquired) {
+      throw new Error(`Failed to acquire MySQL migration lock '${lockName}'.`);
     }
 
-    const conn = await pool.getConnection();
     try {
+      await conn.query(`
+        create table if not exists ${qi(tables.migrations)} (
+          version int primary key,
+          applied_at_utc datetime(3) not null
+        ) engine=InnoDB;
+      `);
+
+      const [existing] = await conn.query(`select version from ${qi(tables.migrations)} where version = ?`, [SCHEMA_VERSION]);
+      const existingRows = existing as Array<{ version: number }>;
+      if (existingRows.length > 0) {
+        return;
+      }
+
       await conn.beginTransaction();
 
       await conn.query(`
@@ -106,13 +124,21 @@ export async function migrateMySql(pool: Pool, tablePrefix: string | undefined):
 
       await conn.commit();
     } catch (error) {
-      await conn.rollback();
+      try {
+        await conn.rollback();
+      } catch {
+        // preserve the original error when the connection itself is broken
+      }
       throw error;
     } finally {
-      conn.release();
+      try {
+        await conn.query("select release_lock(?)", [lockName]);
+      } catch {
+        // lock is released automatically when the connection closes
+      }
     }
   } finally {
-    await pool.query("select release_lock(?)", [lockName]);
+    conn.release();
   }
 }
 

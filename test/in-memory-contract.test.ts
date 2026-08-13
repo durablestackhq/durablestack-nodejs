@@ -152,6 +152,33 @@ test("runtime command receipts support lease, ack, completion, and upload mark",
   assert.equal(afterUpload.length, 0);
 });
 
+test("runtime command receipts in a terminal state cannot be re-leased", async () => {
+  const store = new InMemoryDurableJobStore();
+
+  assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30), true);
+  assert.equal(
+    await store.markRuntimeCommandSucceeded("cmd-done", "worker-a", new Date().toISOString(), new Date().toISOString(), "run-1"),
+    true
+  );
+
+  const releaseSucceeded = await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-b", 30);
+  assert.equal(releaseSucceeded, false, "succeeded receipt must not be re-leasable");
+
+  const sameOwnerRelease = await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30);
+  assert.equal(sameOwnerRelease, false, "succeeded receipt must not be re-leasable even by the original owner");
+
+  const receipts = await store.getRuntimeCommandReceipts(10);
+  assert.equal(receipts[0]?.status, "succeeded", "terminal status must be preserved");
+
+  assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-failed", "worker-a", 30), true);
+  assert.equal(
+    await store.markRuntimeCommandFailed("cmd-failed", "worker-a", new Date().toISOString(), new Date().toISOString(), "err", "boom"),
+    true
+  );
+  const releaseFailed = await store.tryLeaseRuntimeCommandReceipt("cmd-failed", "worker-b", 30);
+  assert.equal(releaseFailed, false, "failed receipt must not be re-leasable");
+});
+
 test("enqueue-if-no-active-run deduplicates pending/leased and allows after terminal", async () => {
   const store = new InMemoryDurableJobStore();
 

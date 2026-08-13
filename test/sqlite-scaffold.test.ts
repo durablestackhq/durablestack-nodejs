@@ -43,6 +43,45 @@ test("sqlite store can be constructed, connected, and closed (env-gated)", async
   assert.ok(true);
 });
 
+test("sqlite migration rejects tables created with a foreign schema (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
+  if (!sqlitePath) {
+    t.skip("DURABLESTACK_TEST_SQLITE is not set");
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "durablestack-sqlite-"));
+  const dbPath = path.join(tempDir, `it_sqlite_foreign_${Date.now().toString(36)}.db`);
+  const prefix = `itforeign_${Date.now().toString(36)}_`;
+  const db = await createSqliteDatabase(dbPath);
+  try {
+    const tables = resolveSqliteTableNames(prefix);
+
+    // Simulate a database prepared by a different runtime: same table names,
+    // different columns, and a migrations ledger that already contains
+    // version 1 (as the .NET runtime's incremental ledger does). The
+    // create-if-not-exists migration passes straight over these tables, so
+    // only the schema verification probes can catch the mismatch.
+    db.exec(`create table "${tables.migrations}" (version integer primary key, applied_at_utc text not null);`);
+    db.exec(`insert into "${tables.migrations}" (version, applied_at_utc) values (1, '2026-01-01T00:00:00Z');`);
+    db.exec(`create table "${tables.jobs}" (id text primary key, name text not null, schedule_type text not null);`);
+    db.exec(`create table "${tables.runs}" (id text primary key, job_id text null, error_detail text null);`);
+    db.exec(`create table "${tables.runtimeCommandReceipts}" (command_id text primary key, uploaded_to_platform integer not null);`);
+
+    await assert.rejects(
+      () => migrateSqlite(db, prefix),
+      /does not match the DurableStack Node\.js schema/
+    );
+  } finally {
+    db.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("sqlite migration creates baseline tables (env-gated)", async (t) => {
   if (!await supportsNodeSqlite()) {
     t.skip("node:sqlite is not available in this Node runtime");

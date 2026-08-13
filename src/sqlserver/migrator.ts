@@ -1,5 +1,6 @@
 import sql from "mssql";
-import { resolveSqlServerTableNames } from "./table-names.js";
+import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verification.js";
+import { resolveSqlServerTableNames, type SqlServerTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -13,7 +14,21 @@ function ql(name: string): string {
 
 export async function migrateSqlServer(pool: sql.ConnectionPool, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveSqlServerTableNames(tablePrefix);
+  await applySqlServerMigrations(pool, tables);
+  await verifySqlServerSchema(pool, tables);
+}
 
+async function verifySqlServerSchema(pool: sql.ConnectionPool, tables: SqlServerTableNames): Promise<void> {
+  for (const probe of buildSchemaProbes(tables, qi)) {
+    try {
+      await pool.request().query(probe.sql);
+    } catch (error) {
+      throw createSchemaMismatchError(probe.table, error);
+    }
+  }
+}
+
+async function applySqlServerMigrations(pool: sql.ConnectionPool, tables: SqlServerTableNames): Promise<void> {
   await pool.request().query(`
     if object_id(${ql(tables.migrations)}, 'U') is null
     begin

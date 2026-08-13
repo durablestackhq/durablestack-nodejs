@@ -180,8 +180,11 @@ export class IngestionEventSyncService {
       return;
     }
 
+    this.resolveEndpoint();
+
     this.running = true;
     this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
     this.loopPromise = (async () => {
       const initialDelayMs = Math.max(0, Math.floor(randomJittered(
@@ -190,17 +193,23 @@ export class IngestionEventSyncService {
         this.options.eventing.ingestionSyncJitterRatio
       ) * 1000));
       if (initialDelayMs > 0) {
-        await sleep(initialDelayMs);
+        await sleep(initialDelayMs, signal);
       }
 
-      while (this.running && this.abortController && !this.abortController.signal.aborted) {
-        await this.flushOnce(this.abortController.signal);
+      while (this.running && !signal.aborted) {
+        try {
+          await this.flushOnce(signal);
+        } catch (error) {
+          const message = error instanceof Error ? error.stack ?? error.message : String(error);
+          console.warn(`DurableStack ingestion sync cycle failed. Worker=${this.options.workerName}. ${message}`);
+          await sleep(2_000, signal);
+        }
         const loopDelayMs = Math.max(0, Math.floor(randomJittered(
           Math.max(0.1, this.options.eventing.ingestionFlushIntervalSeconds),
           this.options.eventing.ingestionSyncJitterEnabled,
           this.options.eventing.ingestionSyncJitterRatio
         ) * 1000));
-        await sleep(loopDelayMs);
+        await sleep(loopDelayMs, signal);
       }
     })();
   }
@@ -214,6 +223,26 @@ export class IngestionEventSyncService {
     this.abortController?.abort();
     if (this.loopPromise) {
       await this.loopPromise;
+    }
+
+    // Final flush so events buffered at shutdown are not silently dropped.
+    const finalFlushSignal = new AbortController().signal;
+    for (let i = 0; i < 10 && this.sink.size > 0; i += 1) {
+      try {
+        await this.flushOnce(finalFlushSignal);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  private resolveEndpoint(): string {
+    try {
+      return new URL(this.options.eventing.ingestionPath, this.options.eventing.ingestionApiBaseUrl).toString();
+    } catch {
+      throw new Error(
+        `Invalid ingestion endpoint configuration: cannot combine ingestionApiBaseUrl '${this.options.eventing.ingestionApiBaseUrl}' with ingestionPath '${this.options.eventing.ingestionPath}'. The base URL must be absolute, including its scheme (e.g. https://).`
+      );
     }
   }
 
@@ -240,7 +269,7 @@ export class IngestionEventSyncService {
       return;
     }
 
-    const endpoint = new URL(this.options.eventing.ingestionPath, this.options.eventing.ingestionApiBaseUrl).toString();
+    const endpoint = this.resolveEndpoint();
     const maxAttempts = Math.max(1, Math.min(10, this.options.eventing.ingestionMaxRetryAttempts));
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -258,10 +287,10 @@ export class IngestionEventSyncService {
           body: json
         }, signal);
       } catch {
-        if (attempt >= maxAttempts) {
+        if (attempt >= maxAttempts || signal.aborted) {
           return;
         }
-        await sleep(Math.min(10, attempt) * 200);
+        await sleep(Math.min(10, attempt) * 200, signal);
         continue;
       }
 
@@ -289,7 +318,7 @@ export class IngestionEventSyncService {
         return;
       }
 
-      await sleep(Math.min(10, attempt) * 200);
+      await sleep(Math.min(10, attempt) * 200, signal);
     }
   }
 

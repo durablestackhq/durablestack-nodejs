@@ -114,8 +114,11 @@ export class RuntimeControlSyncService {
       return;
     }
 
+    this.resolveEndpoint();
+
     this.running = true;
     this.abortController = new AbortController();
+    const signal = this.abortController.signal;
 
     this.loopPromise = (async () => {
       const initialDelayMs = Math.max(0, Math.floor(randomJittered(
@@ -124,25 +127,35 @@ export class RuntimeControlSyncService {
         this.options.eventing.runtimeControlSyncJitterRatio
       ) * 1000));
       if (initialDelayMs > 0) {
-        await sleep(initialDelayMs);
+        await sleep(initialDelayMs, signal);
       }
 
-      while (this.running && this.abortController && !this.abortController.signal.aborted) {
+      while (this.running && !signal.aborted) {
         try {
-          await this.syncOnce(this.abortController.signal);
+          await this.syncOnce(signal);
         } catch (error) {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);
           console.warn(`DurableStack runtime control sync cycle failed. Worker=${this.options.workerName}. ${message}`);
-          await sleep(2_000);
+          await sleep(2_000, signal);
         }
         const loopDelayMs = Math.max(0, Math.floor(randomJittered(
           Math.max(0.1, this.options.eventing.runtimeControlSyncIntervalSeconds),
           this.options.eventing.runtimeControlSyncJitterEnabled,
           this.options.eventing.runtimeControlSyncJitterRatio
         ) * 1000));
-        await sleep(loopDelayMs);
+        await sleep(loopDelayMs, signal);
       }
     })();
+  }
+
+  private resolveEndpoint(): string {
+    try {
+      return new URL(this.options.eventing.runtimeControlSyncPath, this.options.eventing.ingestionApiBaseUrl).toString();
+    } catch {
+      throw new Error(
+        `Invalid runtime control endpoint configuration: cannot combine ingestionApiBaseUrl '${this.options.eventing.ingestionApiBaseUrl}' with runtimeControlSyncPath '${this.options.eventing.runtimeControlSyncPath}'. The base URL must be absolute, including its scheme (e.g. https://).`
+      );
+    }
   }
 
   public async stop(): Promise<void> {
@@ -177,7 +190,7 @@ export class RuntimeControlSyncService {
 
     validateRuntimeControlSyncRequest(request);
 
-    const endpoint = new URL(this.options.eventing.runtimeControlSyncPath, this.options.eventing.ingestionApiBaseUrl).toString();
+    const endpoint = this.resolveEndpoint();
     const payload = JSON.stringify(request);
     if (process.env.DURABLESTACK_RUNTIME_CONTROL_DEBUG_PAYLOAD === "1") {
       console.warn(`DurableStack runtime control request payload: ${payload}`);
@@ -200,11 +213,11 @@ export class RuntimeControlSyncService {
           body: payload
         }, signal);
       } catch {
-        if (attempt >= maxAttempts) {
+        if (attempt >= maxAttempts || signal.aborted) {
           console.warn("DurableStack runtime control sync failed after retries due to request error.");
           return;
         }
-        await sleep(computeBackoffDelayMs(attempt));
+        await sleep(computeBackoffDelayMs(attempt), signal);
         continue;
       }
 
@@ -233,7 +246,7 @@ export class RuntimeControlSyncService {
         return;
       }
 
-      await sleep(computeBackoffDelayMs(attempt));
+      await sleep(computeBackoffDelayMs(attempt), signal);
     }
 
     if (!responseBody) {

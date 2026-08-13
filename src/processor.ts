@@ -3,7 +3,7 @@ import { getNextOccurrenceUtc, validateIanaTimeZone } from "./cron.js";
 import { getEffectiveRunRetentionSeconds } from "./options.js";
 import { DurableJobRegistry } from "./registry.js";
 import type { DurableJobStore, DurableStackEvent, DurableStackEventSink, JobRunRecord, NormalizedDurableStackOptions } from "./types.js";
-import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse } from "./utils.js";
+import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse, sleep } from "./utils.js";
 
 function truncateText(value: string, maxLength: number): string {
   if (maxLength <= 0) {
@@ -76,7 +76,6 @@ export class DurableStackProcessor {
     await this.pruneHistoricalRunsIfDue();
     await this.materializeDueRecurringRuns();
 
-    this.cleanupInFlight();
     const available = Math.max(0, this.options.maxConcurrentRuns - this.inFlight.size);
     if (available <= 0) {
       return 0;
@@ -109,18 +108,16 @@ export class DurableStackProcessor {
   public async drainInFlightRuns(timeoutSeconds: number): Promise<void> {
     const deadline = Date.now() + Math.max(0, timeoutSeconds) * 1000;
     while (this.inFlight.size > 0) {
-      if (Date.now() > deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
         return;
       }
-      await Promise.race(this.inFlight);
-      this.cleanupInFlight();
+      await Promise.race([...this.inFlight, sleep(remainingMs)]);
     }
   }
 
-  private cleanupInFlight(): void {
-    for (const task of this.inFlight) {
-      void task;
-    }
+  public get inFlightCount(): number {
+    return this.inFlight.size;
   }
 
   private async materializeDueRecurringRuns(): Promise<void> {
@@ -228,7 +225,10 @@ export class DurableStackProcessor {
         workerName: this.options.workerName
       }, combinedAbort.signal);
 
-      if (leaseLost || combinedAbort.signal.aborted) {
+      // A handler that returns normally has completed its work, even if an
+      // abort was signaled while it ran; only a lost lease forfeits the write.
+      // Handlers that bail out on abort are expected to throw.
+      if (leaseLost) {
         return;
       }
 

@@ -465,9 +465,10 @@ export class PostgresDurableJobStore implements DurableJobStore {
         recorded_at_utc = now(),
         lease_owner = excluded.lease_owner,
         lease_until_utc = excluded.lease_until_utc
-      where ${q(this.tables.runtimeCommandReceipts)}.lease_until_utc is null
-         or ${q(this.tables.runtimeCommandReceipts)}.lease_until_utc <= now()
-         or ${q(this.tables.runtimeCommandReceipts)}.lease_owner = excluded.lease_owner
+      where ${q(this.tables.runtimeCommandReceipts)}.status not in ('succeeded', 'failed')
+        and (${q(this.tables.runtimeCommandReceipts)}.lease_until_utc is null
+          or ${q(this.tables.runtimeCommandReceipts)}.lease_until_utc <= now()
+          or ${q(this.tables.runtimeCommandReceipts)}.lease_owner = excluded.lease_owner)
       returning command_id;
     `;
 

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { resolveSqliteTableNames } from "./table-names.js";
+import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verification.js";
+import { resolveSqliteTableNames, type SqliteTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -20,7 +21,21 @@ function qi(name: string): string {
 
 export async function migrateSqlite(db: SqliteDatabaseLike, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveSqliteTableNames(tablePrefix);
+  applySqliteMigrations(db, tables);
+  verifySqliteSchema(db, tables);
+}
 
+function verifySqliteSchema(db: SqliteDatabaseLike, tables: SqliteTableNames): void {
+  for (const probe of buildSchemaProbes(tables, qi)) {
+    try {
+      db.prepare(probe.sql).all();
+    } catch (error) {
+      throw createSchemaMismatchError(probe.table, error);
+    }
+  }
+}
+
+function applySqliteMigrations(db: SqliteDatabaseLike, tables: SqliteTableNames): void {
   db.exec(`
     create table if not exists ${qi(tables.migrations)} (
       version integer primary key,
@@ -115,6 +130,16 @@ export async function createSqliteDatabase(databasePath: string): Promise<Sqlite
     await mkdir(parent, { recursive: true });
   }
 
-  const sqliteModule = await import("node:sqlite");
+  let sqliteModule: typeof import("node:sqlite");
+  try {
+    sqliteModule = await import("node:sqlite");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `The DurableStack SQLite provider requires the built-in 'node:sqlite' module, which is unavailable on this runtime (${process.version}). `
+      + `Upgrade to Node.js 22.5 or later, or use a different provider. Underlying error: ${detail}`
+    );
+  }
+
   return new sqliteModule.DatabaseSync(databasePath);
 }

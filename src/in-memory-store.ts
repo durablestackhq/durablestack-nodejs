@@ -386,6 +386,13 @@ export class InMemoryDurableJobStore implements DurableJobStore {
       return true;
     }
 
+    const terminal =
+      existing.status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED ||
+      existing.status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED;
+    if (terminal) {
+      return false;
+    }
+
     if (!existing.leaseUntilUtc || compareIsoAsc(existing.leaseUntilUtc, now) <= 0 || existing.leaseOwner === workerName) {
       existing.status = RUNTIME_COMMAND_RECEIPT_STATUS.LEASED;
       existing.recordedAtUtc = now;

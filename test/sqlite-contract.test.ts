@@ -314,6 +314,44 @@ test("sqlite runtime command receipts support lease, ack, completion, and upload
   }
 });
 
+test("sqlite runtime command receipts in a terminal state cannot be re-leased (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
+  if (!enabled) {
+    t.skip("DURABLESTACK_TEST_SQLITE is not set");
+    return;
+  }
+
+  const isolated = await createIsolatedStore("it_sqlt_term");
+  const { store } = isolated;
+  try {
+    assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30), true);
+    assert.equal(
+      await store.markRuntimeCommandSucceeded("cmd-done", "worker-a", new Date().toISOString(), new Date().toISOString(), undefined),
+      true
+    );
+
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-b", 30),
+      false,
+      "succeeded receipt must not be re-leasable"
+    );
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30),
+      false,
+      "succeeded receipt must not be re-leasable even by the original owner"
+    );
+
+    const receipts = await store.getRuntimeCommandReceipts(10);
+    assert.equal(receipts[0]?.status, "succeeded", "terminal status must be preserved");
+  } finally {
+    await isolated.cleanup();
+  }
+});
+
 test("sqlite recurring schedule admin APIs update state (env-gated)", async (t) => {
   if (!await supportsNodeSqlite()) {
     t.skip("node:sqlite is not available in this Node runtime");

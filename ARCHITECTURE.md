@@ -73,6 +73,7 @@
 - Recurring schedules use IANA time zones and 5-field or 6-field cron expressions.
 - Completion writes are fenced to current lease owner to prevent stale workers from overwriting state.
 - Retention only prunes terminal runs (`succeeded`, `failed`).
+- Database schemas are runtime-specific by design. Jobs are defined in application code, so a run enqueued by one runtime can never be executed by another — the Node.js and .NET runtimes therefore each own their own schema and there is deliberately no cross-runtime table compatibility. Both runtimes may share a database *instance*, but each must have its own tables (use `databaseTablePrefix` to separate them). Because `create table if not exists` migrations pass silently over tables created by something else, every migrator runs schema verification probes after migrating and fails startup with an explicit error if the tables at the configured prefix do not match this runtime's schema (see `src/schema-verification.ts`).
 
 ## Deferred From Initial Build
 

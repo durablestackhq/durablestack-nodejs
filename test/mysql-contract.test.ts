@@ -194,6 +194,38 @@ test("mysql runtime command lease is single-winner under contention (env-gated)"
   }
 });
 
+test("mysql runtime command receipts in a terminal state cannot be re-leased (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_cmdterm");
+  try {
+    assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30), true);
+    assert.equal(
+      await store.markRuntimeCommandSucceeded("cmd-done", "worker-a", new Date().toISOString(), new Date().toISOString(), undefined),
+      true
+    );
+
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-b", 30),
+      false,
+      "succeeded receipt must not be re-leasable"
+    );
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30),
+      false,
+      "succeeded receipt must not be re-leasable even by the original owner"
+    );
+
+    const receipts = await store.getRuntimeCommandReceipts(10);
+    assert.equal(receipts[0]?.status, "succeeded", "terminal status must be preserved");
+  } finally {
+    await store.close();
+  }
+});
+
 test("mysql schema migration is idempotent under repeated execution (env-gated)", async (t) => {
   if (!connectionString) {
     t.skip("DURABLESTACK_TEST_MYSQL is not set");
@@ -204,6 +236,27 @@ test("mysql schema migration is idempotent under repeated execution (env-gated)"
   try {
     await migrateMySql(store.getPool(), prefix);
     await migrateMySql(store.getPool(), prefix);
+    assert.ok(true);
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql concurrent migrations do not deadlock on the advisory lock (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store, prefix } = await createIsolatedStore("it_mysql_migpar");
+  try {
+    // GET_LOCK is per-connection; if the lock were acquired and released on
+    // different pooled connections, the second migrator would time out.
+    await Promise.all([
+      migrateMySql(store.getPool(), prefix),
+      migrateMySql(store.getPool(), prefix),
+      migrateMySql(store.getPool(), prefix)
+    ]);
     assert.ok(true);
   } finally {
     await store.close();

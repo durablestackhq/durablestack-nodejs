@@ -573,7 +573,8 @@ export class MySqlDurableJobStore implements DurableJobStore {
 
       const [rows] = await conn.query(
         `
-          select lease_owner, lease_until_utc
+          select status, lease_owner,
+                 case when lease_until_utc is null or lease_until_utc <= utc_timestamp(3) then 1 else 0 end as lease_expired
           from ${q(this.tables.runtimeCommandReceipts)}
           where command_id = ?
           for update
@@ -581,7 +582,7 @@ export class MySqlDurableJobStore implements DurableJobStore {
         [commandId]
       );
 
-      const existing = rows as Array<{ lease_owner: unknown; lease_until_utc: unknown }>;
+      const existing = rows as Array<{ status: unknown; lease_owner: unknown; lease_expired: unknown }>;
       if (existing.length === 0) {
         await conn.query(
           `
@@ -595,12 +596,15 @@ export class MySqlDurableJobStore implements DurableJobStore {
         return true;
       }
 
+      const status = String(existing[0]!.status ?? "");
+      const terminal =
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED ||
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED;
       const leaseOwner = existing[0]!.lease_owner ? String(existing[0]!.lease_owner) : undefined;
-      const leaseUntilIso = toIsoUtc(existing[0]!.lease_until_utc);
-      const expired = !leaseUntilIso || Date.parse(leaseUntilIso) <= Date.now();
+      const expired = Number(existing[0]!.lease_expired ?? 0) === 1;
       const sameOwner = leaseOwner === workerName;
 
-      if (!expired && !sameOwner) {
+      if (terminal || (!expired && !sameOwner)) {
         await conn.rollback();
         return false;
       }

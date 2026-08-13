@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
-import { resolvePostgresTableNames } from "./table-names.js";
+import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verification.js";
+import { resolvePostgresTableNames, type PostgresTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -9,7 +10,21 @@ function q(name: string): string {
 
 export async function migratePostgres(pool: Pool, tablePrefix: string | undefined): Promise<void> {
   const tables = resolvePostgresTableNames(tablePrefix);
+  await applyPostgresMigrations(pool, tables);
+  await verifyPostgresSchema(pool, tables);
+}
 
+async function verifyPostgresSchema(pool: Pool, tables: PostgresTableNames): Promise<void> {
+  for (const probe of buildSchemaProbes(tables, q)) {
+    try {
+      await pool.query(probe.sql);
+    } catch (error) {
+      throw createSchemaMismatchError(probe.table, error);
+    }
+  }
+}
+
+async function applyPostgresMigrations(pool: Pool, tables: PostgresTableNames): Promise<void> {
   await pool.query(`
     create table if not exists ${q(tables.migrations)} (
       version integer primary key,
