@@ -53,7 +53,11 @@ function rowToRun(row: Record<string, unknown>): JobRunRecord {
     maxAttempts: Number(row.max_attempts),
     leaseOwner: row.lease_owner ? String(row.lease_owner) : undefined,
     leaseUntilUtc: toIsoUtc(row.lease_until_utc),
-    payloadJson: typeof payload === "string" ? payload : (payload ? JSON.stringify(payload) : undefined),
+    // mysql2 auto-parses the json column into a native JS value (including for a
+    // stored string payload, which comes back unwrapped rather than as JSON text),
+    // so this must always re-stringify rather than pass a string through as-is —
+    // and a truthy check would incorrectly treat `false`, `0`, or `""` as absent.
+    payloadJson: (payload === null || typeof payload === "undefined") ? undefined : JSON.stringify(payload),
     errorMessage: row.error_message ? String(row.error_message) : undefined
   };
 }
@@ -411,6 +415,7 @@ export class MySqlDurableJobStore implements DurableJobStore {
           allow_concurrent_runs = values(allow_concurrent_runs),
           retry_behavior = values(retry_behavior),
           retry_initial_delay_seconds = values(retry_initial_delay_seconds),
+          next_run_at_utc = values(next_run_at_utc),
           updated_at_utc = utc_timestamp(3)
       `,
       [
@@ -573,7 +578,8 @@ export class MySqlDurableJobStore implements DurableJobStore {
 
       const [rows] = await conn.query(
         `
-          select lease_owner, lease_until_utc
+          select status, lease_owner,
+                 case when lease_until_utc is null or lease_until_utc <= utc_timestamp(3) then 1 else 0 end as lease_expired
           from ${q(this.tables.runtimeCommandReceipts)}
           where command_id = ?
           for update
@@ -581,7 +587,7 @@ export class MySqlDurableJobStore implements DurableJobStore {
         [commandId]
       );
 
-      const existing = rows as Array<{ lease_owner: unknown; lease_until_utc: unknown }>;
+      const existing = rows as Array<{ status: unknown; lease_owner: unknown; lease_expired: unknown }>;
       if (existing.length === 0) {
         await conn.query(
           `
@@ -595,12 +601,15 @@ export class MySqlDurableJobStore implements DurableJobStore {
         return true;
       }
 
+      const status = String(existing[0]!.status ?? "");
+      const terminal =
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED ||
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED;
       const leaseOwner = existing[0]!.lease_owner ? String(existing[0]!.lease_owner) : undefined;
-      const leaseUntilIso = toIsoUtc(existing[0]!.lease_until_utc);
-      const expired = !leaseUntilIso || Date.parse(leaseUntilIso) <= Date.now();
+      const expired = Number(existing[0]!.lease_expired ?? 0) === 1;
       const sameOwner = leaseOwner === workerName;
 
-      if (!expired && !sameOwner) {
+      if (terminal || (!expired && !sameOwner)) {
         await conn.rollback();
         return false;
       }

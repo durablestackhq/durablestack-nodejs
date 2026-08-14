@@ -454,6 +454,7 @@ export class SqlServerDurableJobStore implements DurableJobStore {
             allow_concurrent_runs = @allowConcurrentRuns,
             retry_behavior = @retryBehavior,
             retry_initial_delay_seconds = @retryInitialDelaySeconds,
+            next_run_at_utc = @nextRunAtUtc,
             updated_at_utc = sysutcdatetime()
         when not matched then
           insert (job_name, job_type, cron_expression, time_zone, max_attempts, enabled, allow_concurrent_runs, retry_behavior, retry_initial_delay_seconds, next_run_at_utc, updated_at_utc)
@@ -592,7 +593,8 @@ export class SqlServerDurableJobStore implements DurableJobStore {
       const existing = await tx.request()
         .input("commandId", sql.NVarChar(256), commandId)
         .query(`
-          select lease_owner, lease_until_utc
+          select status, lease_owner,
+                 case when lease_until_utc is null or lease_until_utc <= sysutcdatetime() then 1 else 0 end as lease_expired
           from ${q(this.tables.runtimeCommandReceipts)} with (updlock, rowlock)
           where command_id = @commandId
         `);
@@ -612,13 +614,16 @@ export class SqlServerDurableJobStore implements DurableJobStore {
         return true;
       }
 
-      const row = existing.recordset[0] as { lease_owner?: unknown; lease_until_utc?: unknown };
+      const row = existing.recordset[0] as { status?: unknown; lease_owner?: unknown; lease_expired?: unknown };
+      const status = String(row.status ?? "");
+      const terminal =
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED ||
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED;
       const owner = row.lease_owner ? String(row.lease_owner) : undefined;
-      const leaseUntil = row.lease_until_utc ? toDate(row.lease_until_utc).getTime() : 0;
-      const expired = !row.lease_until_utc || leaseUntil <= Date.now();
+      const expired = Number(row.lease_expired ?? 0) === 1;
       const sameOwner = owner === workerName;
 
-      if (!expired && !sameOwner) {
+      if (terminal || (!expired && !sameOwner)) {
         await tx.rollback();
         return false;
       }

@@ -3,13 +3,32 @@ import { getNextOccurrenceUtc, validateIanaTimeZone } from "./cron.js";
 import { getEffectiveRunRetentionSeconds } from "./options.js";
 import { DurableJobRegistry } from "./registry.js";
 import type { DurableJobStore, DurableStackEvent, DurableStackEventSink, JobRunRecord, NormalizedDurableStackOptions } from "./types.js";
-import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse } from "./utils.js";
+import { addSeconds, generateId, nowIso, randomJittered, safeJsonParse, sleep } from "./utils.js";
 
 function truncateText(value: string, maxLength: number): string {
   if (maxLength <= 0) {
     return "";
   }
   return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+/**
+ * Exception messages and stack traces routinely contain sensitive values
+ * (connection details, file paths, SQL fragments, business data). Unless the
+ * deployment opts in via `includeErrorDetail`, this text must never leave the
+ * process in a published event — only the exception type name does.
+ */
+function sanitizeErrorTextForPublish(
+  text: string | undefined,
+  options: NormalizedDurableStackOptions
+): string | undefined {
+  if (!text) {
+    return text;
+  }
+  if (!options.eventing.includeErrorDetail) {
+    return undefined;
+  }
+  return truncateText(text, Math.max(1, options.eventing.maxErrorDetailLength));
 }
 
 function getErrorDetail(error: unknown): string | undefined {
@@ -76,7 +95,6 @@ export class DurableStackProcessor {
     await this.pruneHistoricalRunsIfDue();
     await this.materializeDueRecurringRuns();
 
-    this.cleanupInFlight();
     const available = Math.max(0, this.options.maxConcurrentRuns - this.inFlight.size);
     if (available <= 0) {
       return 0;
@@ -109,18 +127,16 @@ export class DurableStackProcessor {
   public async drainInFlightRuns(timeoutSeconds: number): Promise<void> {
     const deadline = Date.now() + Math.max(0, timeoutSeconds) * 1000;
     while (this.inFlight.size > 0) {
-      if (Date.now() > deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
         return;
       }
-      await Promise.race(this.inFlight);
-      this.cleanupInFlight();
+      await Promise.race([...this.inFlight, sleep(remainingMs)]);
     }
   }
 
-  private cleanupInFlight(): void {
-    for (const task of this.inFlight) {
-      void task;
-    }
+  public get inFlightCount(): number {
+    return this.inFlight.size;
   }
 
   private async materializeDueRecurringRuns(): Promise<void> {
@@ -168,11 +184,12 @@ export class DurableStackProcessor {
   }
 
   private async executeRun(run: JobRunRecord, signal: AbortSignal): Promise<void> {
+    // A missing registration is handled inside the try/catch below like any other job
+    // failure — retried, and eventful — rather than failed immediately. In a rolling
+    // deployment, a worker that hasn't yet picked up a new job definition can claim a run
+    // for it; failing non-retryable here would permanently kill that run instead of letting
+    // a worker that does have the registration pick it up on a later attempt.
     const registration = this.registry.get(run.jobName);
-    if (!registration) {
-      await this.store.markFailed(run.id, this.options.workerName, `No registered job named '${run.jobName}'.`, false, undefined);
-      return;
-    }
 
     const started = Date.now();
     await this.publish({
@@ -209,17 +226,30 @@ export class DurableStackProcessor {
         try {
           const extended = await this.store.extendLease(run.id, this.options.workerName, this.options.leaseDurationSeconds);
           if (!extended) {
+            // The store explicitly refused the extension: another worker holds the
+            // lease, or the run was cancelled. That is unambiguous lease loss.
             leaseLost = true;
             localAbort.abort();
           }
-        } catch {
-          leaseLost = true;
-          localAbort.abort();
+        } catch (error) {
+          // A thrown error only means the extension attempt failed transiently (a
+          // dropped connection, a timeout) — it says nothing about who currently
+          // owns the lease. Treating it as loss would cancel healthy long-running
+          // jobs on a momentary blip; log and retry at the next heartbeat instead,
+          // matching the .NET runtime's LeaseHeartbeatJobRunner.
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `DurableStack lease heartbeat failed; retrying at next heartbeat interval. RunId=${run.id} JobName=${run.jobName}. ${message}`
+          );
         }
       })();
     }, Math.max(250, Math.floor(this.options.leaseDurationSeconds * 500)));
 
     try {
+      if (!registration) {
+        throw new Error(`No registered job named '${run.jobName}'.`);
+      }
+
       const payload = safeJsonParse<unknown>(run.payloadJson);
       await registration.handler(payload, {
         runId: run.id,
@@ -228,7 +258,10 @@ export class DurableStackProcessor {
         workerName: this.options.workerName
       }, combinedAbort.signal);
 
-      if (leaseLost || combinedAbort.signal.aborted) {
+      // A handler that returns normally has completed its work, even if an
+      // abort was signaled while it ran; only a lost lease forfeits the write.
+      // Handlers that bail out on abort are expected to throw.
+      if (leaseLost) {
         return;
       }
 
@@ -252,14 +285,20 @@ export class DurableStackProcessor {
         return;
       }
 
+      // `message` is stored locally via markFailed (run history within the user's own
+      // database) and is never redacted. Only the copies placed on the published event
+      // — which can leave the process via a custom sink or the hosted ingestion
+      // client — are sanitized, matching the .NET runtime's default-redacted behavior.
       const message = error instanceof Error ? error.message : "Unknown job failure";
-      const errorDetail = this.options.eventing.includeErrorDetail
-        ? truncateText(getErrorDetail(error) ?? message, Math.max(1, this.options.eventing.maxErrorDetailLength))
-        : undefined;
+      const publishedErrorMessage = sanitizeErrorTextForPublish(message, this.options);
+      const publishedErrorDetail = sanitizeErrorTextForPublish(getErrorDetail(error) ?? message, this.options);
       const shouldRetry = run.attempt < run.maxAttempts;
-      const retryBehavior = registration.retryBehavior ?? registration.recurring?.retryBehavior ?? "backoff";
-      const initialDelay = registration.retryInitialDelaySeconds
-        ?? registration.recurring?.retryInitialDelaySeconds
+      // Matches the .NET runtime's default (RetryBehavior.FixedDelay) when a job doesn't
+      // specify a retry behavior explicitly. `registration` may be undefined here (the
+      // "no registration" failure above), in which case the global defaults apply.
+      const retryBehavior = registration?.retryBehavior ?? registration?.recurring?.retryBehavior ?? "fixed";
+      const initialDelay = registration?.retryInitialDelaySeconds
+        ?? registration?.recurring?.retryInitialDelaySeconds
         ?? this.options.retryDelaySeconds;
       const delayBase = Math.max(1, initialDelay);
       const retrySeconds = retryBehavior === "fixed"
@@ -286,8 +325,8 @@ export class DurableStackProcessor {
           maxAttempts: run.maxAttempts,
           workerName: this.options.workerName,
           errorType: error instanceof Error ? error.name : "Error",
-          errorMessage: message,
-          errorDetail,
+          errorMessage: publishedErrorMessage,
+          errorDetail: publishedErrorDetail,
           durationMs: Date.now() - started,
           retryAtUtc
         });

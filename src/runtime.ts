@@ -45,6 +45,7 @@ export interface DurableStackRuntime {
 
   enqueue(jobName: string, payload?: unknown): Promise<string>;
   schedule(jobName: string, payload: unknown, runAtUtc: string): Promise<string>;
+  cancelRun(runId: string): Promise<boolean>;
   getRun(runId: string): Promise<JobRunRecord | undefined>;
   getRecentRuns(take?: number): Promise<JobRunRecord[]>;
   getRunsByStatus(status: keyof typeof RUN_STATUS | RunStatusString, take?: number): Promise<JobRunRecord[]>;
@@ -67,6 +68,8 @@ interface ManagedBackgroundService {
 
 type RunStatusString = "pending" | "leased" | "succeeded" | "failed";
 
+const SHUTDOWN_ABORT_GRACE_SECONDS = 5;
+
 class DurableStackRuntimeImpl implements DurableStackRuntime {
   private readonly registry = new DurableJobRegistry();
   private readonly processor: DurableStackProcessor;
@@ -77,7 +80,8 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
   private running = false;
   private autodiscoveryLoaded = false;
   private loopPromise: Promise<void> | undefined;
-  private abortController: AbortController | undefined;
+  private loopAbort: AbortController | undefined;
+  private jobsAbort: AbortController | undefined;
 
   public constructor(
     private readonly store: DurableJobStore,
@@ -179,6 +183,10 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
     return this.store.enqueue(jobName, registration.jobType, safeJsonStringify(payload), runAtUtc, registration.maxAttempts);
   }
 
+  public async cancelRun(runId: string): Promise<boolean> {
+    return this.store.cancelRun(runId);
+  }
+
   public async getRun(runId: string): Promise<JobRunRecord | undefined> {
     return this.store.getRun(runId);
   }
@@ -245,12 +253,16 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
     await this.loadAutodiscoveredJobsIfEnabled();
 
     this.running = true;
-    this.abortController = new AbortController();
+    this.loopAbort = new AbortController();
+    this.jobsAbort = new AbortController();
     await this.processor.initializeRecurringJobs();
 
     for (const service of this.managedServices) {
       service.start();
     }
+
+    const loopSignal = this.loopAbort.signal;
+    const jobsSignal = this.jobsAbort.signal;
 
     this.loopPromise = (async () => {
       const initialDelaySeconds = randomJittered(
@@ -259,17 +271,17 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
         this.options.pollJitterRatio
       );
       if (initialDelaySeconds > 0) {
-        await sleep(initialDelaySeconds * 1000);
+        await sleep(initialDelaySeconds * 1000, loopSignal);
       }
 
-      while (this.running && this.abortController && !this.abortController.signal.aborted) {
+      while (this.running && !loopSignal.aborted) {
         try {
-          await this.processor.processOnce(this.abortController.signal);
+          await this.processor.processOnce(jobsSignal);
           await this.emitHeartbeat();
         } catch (error) {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);
           console.warn(`DurableStack processor cycle failed. Worker=${this.options.workerName}. ${message}`);
-          await sleep(2_000);
+          await sleep(2_000, loopSignal);
         }
 
         const delaySeconds = randomJittered(
@@ -278,7 +290,7 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
           this.options.pollJitterRatio
         );
 
-        await sleep(delaySeconds * 1000);
+        await sleep(delaySeconds * 1000, loopSignal);
       }
     })();
   }
@@ -327,20 +339,29 @@ class DurableStackRuntimeImpl implements DurableStackRuntime {
       return;
     }
 
+    // Stop claiming new work first: end the poll loop without signaling
+    // in-flight handlers, so runs that finish during the drain window are
+    // recorded normally instead of being re-executed after restart.
     this.running = false;
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-
+    this.loopAbort?.abort();
     if (this.loopPromise) {
       await this.loopPromise;
     }
 
+    await this.processor.drainInFlightRuns(this.options.shutdownDrainTimeoutSeconds);
+
+    // Only stragglers that outlived the drain window get a cancellation
+    // signal; give them a bounded grace period to settle.
+    if (this.processor.inFlightCount > 0) {
+      this.jobsAbort?.abort();
+      await this.processor.drainInFlightRuns(SHUTDOWN_ABORT_GRACE_SECONDS);
+    }
+
+    // Services stop last so events emitted during the drain are still
+    // captured (the ingestion service performs a final flush on stop).
     for (const service of this.managedServices) {
       await service.stop();
     }
-
-    await this.processor.drainInFlightRuns(this.options.shutdownDrainTimeoutSeconds);
   }
 
   private async emitHeartbeat(): Promise<void> {

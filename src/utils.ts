@@ -29,6 +29,19 @@ export function ensurePositive(value: number | undefined, fallback: number): num
   return value;
 }
 
+/**
+ * Like `ensurePositive`, but accepts zero. Use for settings where zero is a
+ * meaningful, distinct configuration (e.g. "don't wait at all") rather than an
+ * absent value — only a negative or non-finite input falls back to the default,
+ * matching the .NET runtime's equivalent option setters.
+ */
+export function ensureNonNegative(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return fallback;
+  }
+  return value;
+}
+
 export function safeJsonParse<T>(json: string | undefined): T | undefined {
   if (!json) {
     return undefined;
@@ -73,8 +86,21 @@ export function randomJittered(baseSeconds: number, enabled: boolean, ratio: num
   return Math.max(0.01, baseSeconds + jitter);
 }
 
-export function sleep(ms: number): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(handle);
+      resolve();
+    };
+    const handle = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

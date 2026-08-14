@@ -850,3 +850,157 @@ test("runtime start auto-wires hosted sinks/services when credentials are config
 
   assert.ok(true);
 });
+
+test("ingestion sync start fails fast on a base URL without a scheme", () => {
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "api.example.com",
+      ingestionPath: "/v1/events/batch"
+    }
+  });
+
+  const sink = new IngestionDurableStackEventSink();
+  const service = new IngestionEventSyncService(sink, options, async () => ({ status: 200, bodyText: "{}" }));
+
+  assert.throws(() => service.start(), /Invalid ingestion endpoint configuration/);
+});
+
+test("ingestion sync start rejects a non-loopback http base URL", () => {
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "http://api.example.com",
+      ingestionPath: "/v1/events/batch"
+    }
+  });
+
+  const sink = new IngestionDurableStackEventSink();
+  const service = new IngestionEventSyncService(sink, options, async () => ({ status: 200, bodyText: "{}" }));
+
+  assert.throws(() => service.start(), /must use https/);
+});
+
+test("ingestion sync start allows http for loopback base URLs", async () => {
+  const captured: Array<{ url: string }> = [];
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "http://127.0.0.1:1",
+      ingestionPath: "/v1/events/batch",
+      ingestionMaxBatchSize: 100,
+      ingestionMaxRequestBodyBytes: 1_000_000,
+      ingestionMaxRetryAttempts: 1
+    }
+  });
+
+  const sink = new IngestionDurableStackEventSink();
+  await sink.publish({
+    eventId: "evt-1",
+    eventType: EVENT_TYPES.JOB_STARTED,
+    eventVersion: 2,
+    occurredAtUtc: new Date().toISOString(),
+    runId: "run-1",
+    jobName: "job-a",
+    attempt: 1,
+    maxAttempts: 3,
+    workerName: "worker-a"
+  });
+
+  const service = new IngestionEventSyncService(sink, options, async (request) => {
+    captured.push(request);
+    return {
+      status: 200,
+      bodyText: JSON.stringify({ acceptedCount: 1, rejectedCount: 0, serverTimeUtc: new Date().toISOString(), isDuplicate: false })
+    };
+  });
+
+  assert.doesNotThrow(() => service.start());
+  await service.stop();
+  assert.equal(captured.length, 1);
+});
+
+test("runtime control sync start rejects a non-loopback http base URL", () => {
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "http://api.example.com",
+      runtimeControlSyncPath: "/v1/runtime/control/sync"
+    }
+  });
+
+  const admin: RuntimeControlAdmin = {
+    listScheduledJobs: async () => [],
+    setScheduledJobEnabled: async () => true,
+    updateScheduledJobCron: async () => true,
+    runScheduledJobNow: async () => "run-1"
+  };
+
+  const service = new RuntimeControlSyncService(
+    new InMemoryDurableJobStore(),
+    admin,
+    options,
+    async () => ({ status: 200, bodyText: "{}" })
+  );
+
+  assert.throws(() => service.start(), /must use https/);
+});
+
+test("ingestion sync stop flushes buffered events", async () => {
+  const captured: string[] = [];
+
+  const options = normalizeOptions({
+    workerName: "worker-a",
+    eventing: {
+      tenantId: "tenant-1",
+      clientSecret: "secret-1",
+      ingestionApiBaseUrl: "https://api.example.com",
+      ingestionPath: "/v1/events/batch",
+      ingestionMaxBatchSize: 100,
+      ingestionMaxRequestBodyBytes: 1_000_000,
+      ingestionMaxRetryAttempts: 1,
+      ingestionFlushIntervalSeconds: 3600
+    }
+  });
+
+  const sink = new IngestionDurableStackEventSink();
+  const service = new IngestionEventSyncService(sink, options, async (request) => {
+    captured.push(request.body);
+    return {
+      status: 200,
+      bodyText: JSON.stringify({ acceptedCount: 1, rejectedCount: 0, serverTimeUtc: new Date().toISOString(), isDuplicate: false })
+    };
+  });
+
+  service.start();
+
+  await sink.publish({
+    eventId: "evt-late",
+    eventType: EVENT_TYPES.JOB_SUCCEEDED,
+    eventVersion: 2,
+    occurredAtUtc: new Date().toISOString(),
+    runId: "run-late",
+    jobName: "job-late",
+    attempt: 1,
+    maxAttempts: 3,
+    workerName: "worker-a"
+  });
+
+  // The flush interval is one hour, so only the final flush in stop() can
+  // deliver the buffered event.
+  await service.stop();
+
+  assert.equal(sink.size, 0, "buffered events must be flushed on stop");
+  assert.equal(captured.length, 1);
+  const body = JSON.parse(captured[0]!);
+  assert.equal(body.events[0]?.runId, "run-late");
+});

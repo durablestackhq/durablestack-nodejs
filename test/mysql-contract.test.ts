@@ -194,6 +194,72 @@ test("mysql runtime command lease is single-winner under contention (env-gated)"
   }
 });
 
+test("mysql round-trips falsy JSON payloads (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_falsypl");
+  try {
+    const cases: Array<{ jobName: string; payload: unknown }> = [
+      { jobName: "job-false", payload: false },
+      { jobName: "job-zero", payload: 0 },
+      { jobName: "job-empty-string", payload: "" },
+      { jobName: "job-string", payload: "hello world" },
+      { jobName: "job-object", payload: { userId: 123 } }
+    ];
+
+    for (const { jobName, payload } of cases) {
+      const runId = await store.enqueue(jobName, jobName, JSON.stringify(payload), new Date().toISOString(), 3);
+      const run = await store.getRun(runId);
+      assert.equal(
+        run?.payloadJson,
+        JSON.stringify(payload),
+        `payload ${JSON.stringify(payload)} must round-trip, not be dropped as falsy or unwrapped by JSON auto-parsing`
+      );
+    }
+
+    const noPayloadRunId = await store.enqueue("job-none", "job-none", undefined, new Date().toISOString(), 3);
+    const noPayloadRun = await store.getRun(noPayloadRunId);
+    assert.equal(noPayloadRun?.payloadJson, undefined, "an absent payload must remain undefined");
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql runtime command receipts in a terminal state cannot be re-leased (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store } = await createIsolatedStore("it_mysql_cmdterm");
+  try {
+    assert.equal(await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30), true);
+    assert.equal(
+      await store.markRuntimeCommandSucceeded("cmd-done", "worker-a", new Date().toISOString(), new Date().toISOString(), undefined),
+      true
+    );
+
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-b", 30),
+      false,
+      "succeeded receipt must not be re-leasable"
+    );
+    assert.equal(
+      await store.tryLeaseRuntimeCommandReceipt("cmd-done", "worker-a", 30),
+      false,
+      "succeeded receipt must not be re-leasable even by the original owner"
+    );
+
+    const receipts = await store.getRuntimeCommandReceipts(10);
+    assert.equal(receipts[0]?.status, "succeeded", "terminal status must be preserved");
+  } finally {
+    await store.close();
+  }
+});
+
 test("mysql schema migration is idempotent under repeated execution (env-gated)", async (t) => {
   if (!connectionString) {
     t.skip("DURABLESTACK_TEST_MYSQL is not set");
@@ -204,6 +270,27 @@ test("mysql schema migration is idempotent under repeated execution (env-gated)"
   try {
     await migrateMySql(store.getPool(), prefix);
     await migrateMySql(store.getPool(), prefix);
+    assert.ok(true);
+  } finally {
+    await store.close();
+  }
+});
+
+test("mysql concurrent migrations do not deadlock on the advisory lock (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_MYSQL is not set");
+    return;
+  }
+
+  const { store, prefix } = await createIsolatedStore("it_mysql_migpar");
+  try {
+    // GET_LOCK is per-connection; if the lock were acquired and released on
+    // different pooled connections, the second migrator would time out.
+    await Promise.all([
+      migrateMySql(store.getPool(), prefix),
+      migrateMySql(store.getPool(), prefix),
+      migrateMySql(store.getPool(), prefix)
+    ]);
     assert.ok(true);
   } finally {
     await store.close();

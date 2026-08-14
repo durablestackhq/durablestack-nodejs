@@ -451,6 +451,7 @@ export class SqliteDurableJobStore implements DurableJobStore {
         allow_concurrent_runs = excluded.allow_concurrent_runs,
         retry_behavior = excluded.retry_behavior,
         retry_initial_delay_seconds = excluded.retry_initial_delay_seconds,
+        next_run_at_utc = excluded.next_run_at_utc,
         updated_at_utc = excluded.updated_at_utc
     `).run(
       registration.jobName,
@@ -586,7 +587,7 @@ export class SqliteDurableJobStore implements DurableJobStore {
     db.exec("begin immediate transaction;");
     try {
       const existing = db.prepare(`
-        select lease_owner, lease_until_utc
+        select status, lease_owner, lease_until_utc
         from ${q(this.tables.runtimeCommandReceipts)}
         where command_id = ?
       `).get(commandId) as Record<string, unknown> | undefined;
@@ -601,12 +602,16 @@ export class SqliteDurableJobStore implements DurableJobStore {
         return true;
       }
 
+      const status = String(existing.status ?? "");
+      const terminal =
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.SUCCEEDED ||
+        status === RUNTIME_COMMAND_RECEIPT_STATUS.FAILED;
       const owner = existing.lease_owner ? String(existing.lease_owner) : undefined;
       const leaseUntilIso = toIsoUtc(existing.lease_until_utc);
       const expired = !leaseUntilIso || Date.parse(leaseUntilIso) <= Date.now();
       const sameOwner = owner === workerName;
 
-      if (!expired && !sameOwner) {
+      if (terminal || (!expired && !sameOwner)) {
         db.exec("rollback;");
         return false;
       }
