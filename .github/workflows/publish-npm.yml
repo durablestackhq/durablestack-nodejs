@@ -17,6 +17,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show publish context
+        run: |
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Ref: $GITHUB_REF"
+          echo "Ref name: $GITHUB_REF_NAME"
+          echo "Workflow: $GITHUB_WORKFLOW"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -48,6 +55,23 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish to npm
+      - name: Publish to npm (Trusted Publishing)
+        id: publish_oidc
         if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
         run: npm publish --provenance --access public
+
+      - name: Publish to npm (token fallback)
+        id: publish_token
+        if: startsWith(github.ref, 'refs/tags/v') && steps.publish_oidc.outcome != 'success' && secrets.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Fail if publish did not succeed
+        if: startsWith(github.ref, 'refs/tags/v') && steps.publish_oidc.outcome != 'success' && steps.publish_token.outcome != 'success'
+        run: |
+          echo "Publish failed with both Trusted Publishing and token fallback."
+          echo "If Trusted Publishing is configured, verify npm Trusted Publisher settings and wait for propagation."
+          echo "Otherwise, add repository secret NPM_TOKEN with an npm Automation token that has publish access to 'durablestack'."
+          exit 1
