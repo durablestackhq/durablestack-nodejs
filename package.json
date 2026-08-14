@@ -1,6 +1,6 @@
 {
   "name": "durablestack",
-  "version": "0.0.1-beta.10",
+  "version": "0.0.1-beta.11",
   "description": "Durable background jobs for Node.js with PostgreSQL, MySQL, SQL Server, SQLite, and in-memory providers.",
   "license": "MIT",
   "type": "module",

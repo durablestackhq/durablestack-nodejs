@@ -7,6 +7,8 @@ import { InMemoryDurableJobStore } from "../src/in-memory-store.js";
 import { DurableStackProcessor } from "../src/processor.js";
 import { DurableJobRegistry } from "../src/registry.js";
 import { normalizeOptions } from "../src/options.js";
+import { EVENT_TYPES } from "../src/constants.js";
+import type { DurableStackEvent, DurableStackEventSink } from "../src/types.js";
 
 const fixturesDir = join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "autodiscovery");
 
@@ -314,6 +316,10 @@ test("processor initializes recurring with KeepDatabase and disables orphans by 
 test("processor initialize recurring UpdateFromCode updates existing schedule", async () => {
   const store = new InMemoryDurableJobStore();
 
+  // A far-future stale nextRunAtUtc, as if the job hadn't fired in a long time
+  // under its old (monthly) cron. UpdateFromCode must not leave this in place
+  // once the code has moved the job to a much tighter cadence.
+  const staleNextRunAtUtc = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   await store.upsertRecurringJob({
     jobName: "shared",
     jobType: "shared",
@@ -325,7 +331,7 @@ test("processor initialize recurring UpdateFromCode updates existing schedule", 
       allowConcurrentRuns: false
     },
     handler: async () => {}
-  }, new Date(Date.now() + 60_000).toISOString());
+  }, staleNextRunAtUtc);
 
   const registry = new DurableJobRegistry();
   registry.register({
@@ -355,6 +361,15 @@ test("processor initialize recurring UpdateFromCode updates existing schedule", 
 
   const sharedAfter = (await store.getRecurringJobs(true)).find((x) => x.jobName === "shared");
   assert.equal(sharedAfter?.cronExpression, "*/5 * * * *");
+  assert.notEqual(
+    sharedAfter?.nextRunAtUtc,
+    staleNextRunAtUtc,
+    "UpdateFromCode must recompute nextRunAtUtc from the new schedule rather than keeping the stale value"
+  );
+  assert.ok(
+    Date.parse(sharedAfter!.nextRunAtUtc) <= Date.now() + 5 * 60 * 1000,
+    "the new cron (every 5 minutes) should produce a near-term next run, not a month out"
+  );
 });
 
 test("runtime cancels handler when lease extension fails", async () => {
@@ -398,6 +413,53 @@ test("runtime cancels handler when lease extension fails", async () => {
   assert.equal(abortSeen, true);
   assert.ok(run);
   assert.notEqual(run?.status, "succeeded");
+});
+
+test("runtime does not cancel a handler when lease extension throws transiently", async () => {
+  class FlakyHeartbeatStore extends InMemoryDurableJobStore {
+    public failures = 0;
+
+    override async extendLease(runId: string, workerName: string, leaseDurationSeconds: number): Promise<boolean> {
+      // Every heartbeat attempt throws (simulating a dropped connection), never
+      // returning `false`. A thrown error must not be treated as lease loss.
+      this.failures += 1;
+      throw new Error("connection reset");
+    }
+  }
+
+  const store = new FlakyHeartbeatStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 1,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 2
+  });
+
+  let sawAbort = false;
+  runtime.registerJob("resilient", async (_payload, _ctx, signal) => {
+    // Runs long enough for several heartbeat attempts (heartbeat interval is
+    // max(250ms, leaseDurationSeconds*500ms) = 500ms here) to all fail.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    sawAbort = signal.aborted;
+  });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("resilient");
+
+  let run;
+  for (let i = 0; i < 60; i += 1) {
+    run = await runtime.getRun(runId);
+    if (run?.status === "succeeded") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await runtime.stop();
+
+  assert.ok(store.failures >= 1, "expected at least one heartbeat failure to have occurred");
+  assert.equal(sawAbort, false, "a transient heartbeat error must not abort the running handler");
+  assert.equal(run?.status, "succeeded", "the run must complete normally despite transient heartbeat failures");
 });
 
 test("runtime shutdown records success for a run that completes during the drain window", async () => {
@@ -484,6 +546,42 @@ test("runtime shutdown drain timeout is honored for handlers that ignore the abo
   assert.ok(elapsed < 5_000, `stop() took ${elapsed}ms; drain timeout was not honored`);
 });
 
+test("shutdownDrainTimeoutSeconds: 0 aborts in-flight runs immediately instead of waiting for the default", async () => {
+  const store = new InMemoryDurableJobStore();
+  const runtime = createDurableStackWithStore(store, {
+    pollIntervalSeconds: 0.1,
+    leaseDurationSeconds: 5,
+    claimBatchSize: 1,
+    maxConcurrentRuns: 1,
+    shutdownDrainTimeoutSeconds: 0
+  });
+
+  let handlerStarted = false;
+  runtime.registerJob("hangs-until-aborted", async (_payload, _ctx, signal) => {
+    handlerStarted = true;
+    // Never resolves on its own; only responds to the abort signal. If
+    // shutdownDrainTimeoutSeconds: 0 were silently coerced to the 10s default (the
+    // bug this test guards against), stop() would block for ~10s waiting for this
+    // to finish naturally before ever sending the abort signal.
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  });
+
+  await runtime.start();
+  await runtime.enqueue("hangs-until-aborted");
+  for (let i = 0; i < 40 && !handlerStarted; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(handlerStarted, true);
+
+  const started = Date.now();
+  await runtime.stop();
+  const elapsed = Date.now() - started;
+
+  assert.ok(elapsed < 2_000, `stop() took ${elapsed}ms; shutdownDrainTimeoutSeconds: 0 must not be coerced to the 10s default`);
+});
+
 test("cancelRun cancels pending runs and reports missing runs", async () => {
   const runtime = createDurableStack({
     pollIntervalSeconds: 60,
@@ -544,4 +642,140 @@ test("runtime shutdown does not record failed run for cancellation", async () =>
   assert.equal(leasedObserved, true);
   assert.ok(afterStop);
   assert.equal(afterStop?.status, "leased");
+});
+
+function collectingSink(): { sink: DurableStackEventSink; events: DurableStackEvent[] } {
+  const events: DurableStackEvent[] = [];
+  return {
+    events,
+    sink: {
+      publish: async (event) => {
+        events.push(event);
+      }
+    }
+  };
+}
+
+test("job_failed events redact error message and detail by default", async () => {
+  const store = new InMemoryDurableJobStore();
+  const { sink, events } = collectingSink();
+  const runtime = createDurableStackWithStore(
+    store,
+    {
+      pollIntervalSeconds: 0.1,
+      leaseDurationSeconds: 2,
+      claimBatchSize: 1,
+      maxConcurrentRuns: 1
+    },
+    [sink]
+  );
+
+  runtime.registerJob("boom", async () => {
+    throw new Error("connection string: postgres://user:secret@host/db");
+  }, { maxAttempts: 1 });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("boom");
+
+  let failed;
+  for (let i = 0; i < 40; i += 1) {
+    failed = events.find((e) => e.eventType === EVENT_TYPES.JOB_FAILED && e.runId === runId);
+    if (failed) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await runtime.stop();
+
+  assert.ok(failed, "expected a job_failed event to be published");
+  assert.equal(failed?.errorType, "Error", "the exception type name is not sensitive and is always included");
+  assert.equal(failed?.errorMessage, undefined, "errorMessage must be redacted unless includeErrorDetail is enabled");
+  assert.equal(failed?.errorDetail, undefined, "errorDetail must be redacted unless includeErrorDetail is enabled");
+
+  const storedRun = await store.getRun(runId);
+  assert.match(
+    storedRun?.errorMessage ?? "",
+    /secret/,
+    "the run's own local history is not redacted, only the event published to sinks"
+  );
+});
+
+test("job_failed events include error message and detail when includeErrorDetail is enabled", async () => {
+  const store = new InMemoryDurableJobStore();
+  const { sink, events } = collectingSink();
+  const runtime = createDurableStackWithStore(
+    store,
+    {
+      pollIntervalSeconds: 0.1,
+      leaseDurationSeconds: 2,
+      claimBatchSize: 1,
+      maxConcurrentRuns: 1,
+      eventing: {
+        includeErrorDetail: true,
+        maxErrorDetailLength: 4096
+      }
+    },
+    [sink]
+  );
+
+  runtime.registerJob("boom", async () => {
+    throw new Error("boom failure detail");
+  }, { maxAttempts: 1 });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("boom");
+
+  let failed;
+  for (let i = 0; i < 40; i += 1) {
+    failed = events.find((e) => e.eventType === EVENT_TYPES.JOB_FAILED && e.runId === runId);
+    if (failed) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await runtime.stop();
+
+  assert.ok(failed, "expected a job_failed event to be published");
+  assert.equal(failed?.errorMessage, "boom failure detail");
+  assert.ok(failed?.errorDetail?.includes("boom failure detail"), "errorDetail should include the stack trace/message");
+});
+
+test("job_failed errorDetail is truncated to maxErrorDetailLength when included", async () => {
+  const store = new InMemoryDurableJobStore();
+  const { sink, events } = collectingSink();
+  const runtime = createDurableStackWithStore(
+    store,
+    {
+      pollIntervalSeconds: 0.1,
+      leaseDurationSeconds: 2,
+      claimBatchSize: 1,
+      maxConcurrentRuns: 1,
+      eventing: {
+        includeErrorDetail: true,
+        maxErrorDetailLength: 10
+      }
+    },
+    [sink]
+  );
+
+  runtime.registerJob("boom", async () => {
+    throw new Error("this message is definitely longer than ten characters");
+  }, { maxAttempts: 1 });
+
+  await runtime.start();
+  const runId = await runtime.enqueue("boom");
+
+  let failed;
+  for (let i = 0; i < 40; i += 1) {
+    failed = events.find((e) => e.eventType === EVENT_TYPES.JOB_FAILED && e.runId === runId);
+    if (failed) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await runtime.stop();
+
+  assert.ok(failed);
+  assert.equal(failed?.errorMessage?.length, 10);
+  assert.ok((failed?.errorDetail?.length ?? 0) <= 10);
 });

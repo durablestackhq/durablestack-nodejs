@@ -454,6 +454,7 @@ export class SqlServerDurableJobStore implements DurableJobStore {
             allow_concurrent_runs = @allowConcurrentRuns,
             retry_behavior = @retryBehavior,
             retry_initial_delay_seconds = @retryInitialDelaySeconds,
+            next_run_at_utc = @nextRunAtUtc,
             updated_at_utc = sysutcdatetime()
         when not matched then
           insert (job_name, job_type, cron_expression, time_zone, max_attempts, enabled, allow_concurrent_runs, retry_behavior, retry_initial_delay_seconds, next_run_at_utc, updated_at_utc)

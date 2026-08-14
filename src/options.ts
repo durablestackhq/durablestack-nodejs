@@ -1,12 +1,10 @@
-import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 import type {
   DurableStackAutodiscoveryOptions,
   DurableStackEventingOptions,
   DurableStackOptions,
   NormalizedDurableStackOptions
 } from "./types.js";
-import { ensurePositive, normalizePrefix } from "./utils.js";
+import { ensureNonNegative, ensurePositive, normalizePrefix } from "./utils.js";
 
 const DEFAULT_AUTODISCOVERY: Required<Omit<DurableStackAutodiscoveryOptions, "baseDir">> = {
   enabled: false,
@@ -51,7 +49,11 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
     ...(input?.eventing ?? {})
   };
 
-  const defaultBaseDir = dirname(fileURLToPath(new URL("../", import.meta.url)));
+  // Job files live in the consuming application, not in this package, so autodiscovery
+  // must default to the process's working directory. (A previous version derived this
+  // from `import.meta.url` and, once installed as a dependency, resolved one directory
+  // too high — into `node_modules` itself — which `walkFiles` would then scan in full.)
+  const defaultBaseDir = process.cwd();
   const autodiscoveryInput = input?.autodiscovery;
   const autodiscovery = {
     ...DEFAULT_AUTODISCOVERY,
@@ -72,7 +74,11 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
     claimBatchSize: Math.max(1, Math.floor(ensurePositive(input?.claimBatchSize, 5))),
     maxConcurrentRuns: Math.max(1, Math.floor(ensurePositive(input?.maxConcurrentRuns, 5))),
     leaseDurationSeconds: ensurePositive(input?.leaseDurationSeconds, 30),
-    shutdownDrainTimeoutSeconds: Math.max(0, ensurePositive(input?.shutdownDrainTimeoutSeconds, 10)),
+    // Zero is a meaningful, legitimate value here ("don't wait for in-flight runs to
+    // drain at all") and must not be coerced to the default; only a negative or
+    // non-finite value falls back, matching the .NET runtime's ShutdownDrainTimeoutSeconds
+    // setter.
+    shutdownDrainTimeoutSeconds: ensureNonNegative(input?.shutdownDrainTimeoutSeconds, 10),
     retryDelaySeconds: ensurePositive(input?.retryDelaySeconds, 5),
     retryMaxDelaySeconds: ensurePositive(input?.retryMaxDelaySeconds, 3600),
     retryJitterEnabled: input?.retryJitterEnabled ?? false,
@@ -96,5 +102,10 @@ export function normalizeOptions(input: DurableStackOptions | undefined): Normal
 }
 
 export function getEffectiveRunRetentionSeconds(options: NormalizedDurableStackOptions): number {
-  return options.retention.runRetentionSeconds ?? 86_400;
+  const configured = options.retention.runRetentionSeconds;
+  // A zero or negative value is treated as "unset" and falls back to the default,
+  // matching the .NET runtime's DurableStackRetentionOptions.GetEffectiveRunRetention.
+  // Passing it straight through would make the prune sweep's cutoff timestamp equal to
+  // or later than "now", deleting every currently completed run on the next sweep.
+  return typeof configured === "number" && configured > 0 ? configured : 86_400;
 }

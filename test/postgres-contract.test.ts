@@ -163,6 +163,39 @@ test("postgres runtime command lease is single-winner under contention (env-gate
   }
 });
 
+test("postgres round-trips falsy JSON payloads (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_POSTGRES is not set");
+    return;
+  }
+
+  const store = await createIsolatedStore("it_falsy_payload");
+  try {
+    const cases: Array<{ jobName: string; payload: unknown }> = [
+      { jobName: "job-false", payload: false },
+      { jobName: "job-zero", payload: 0 },
+      { jobName: "job-empty-string", payload: "" },
+      { jobName: "job-object", payload: { userId: 123 } }
+    ];
+
+    for (const { jobName, payload } of cases) {
+      const runId = await store.enqueue(jobName, jobName, JSON.stringify(payload), new Date().toISOString(), 3);
+      const run = await store.getRun(runId);
+      assert.equal(
+        run?.payloadJson,
+        JSON.stringify(payload),
+        `payload ${JSON.stringify(payload)} must round-trip, not be dropped as falsy`
+      );
+    }
+
+    const noPayloadRunId = await store.enqueue("job-none", "job-none", undefined, new Date().toISOString(), 3);
+    const noPayloadRun = await store.getRun(noPayloadRunId);
+    assert.equal(noPayloadRun?.payloadJson, undefined, "an absent payload must remain undefined");
+  } finally {
+    await store.close();
+  }
+});
+
 test("postgres runtime command receipts in a terminal state cannot be re-leased (env-gated)", async (t) => {
   if (!connectionString) {
     t.skip("DURABLESTACK_TEST_POSTGRES is not set");

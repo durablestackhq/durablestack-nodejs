@@ -53,7 +53,11 @@ function rowToRun(row: Record<string, unknown>): JobRunRecord {
     maxAttempts: Number(row.max_attempts),
     leaseOwner: row.lease_owner ? String(row.lease_owner) : undefined,
     leaseUntilUtc: toIsoUtc(row.lease_until_utc),
-    payloadJson: typeof payload === "string" ? payload : (payload ? JSON.stringify(payload) : undefined),
+    // mysql2 auto-parses the json column into a native JS value (including for a
+    // stored string payload, which comes back unwrapped rather than as JSON text),
+    // so this must always re-stringify rather than pass a string through as-is —
+    // and a truthy check would incorrectly treat `false`, `0`, or `""` as absent.
+    payloadJson: (payload === null || typeof payload === "undefined") ? undefined : JSON.stringify(payload),
     errorMessage: row.error_message ? String(row.error_message) : undefined
   };
 }
@@ -411,6 +415,7 @@ export class MySqlDurableJobStore implements DurableJobStore {
           allow_concurrent_runs = values(allow_concurrent_runs),
           retry_behavior = values(retry_behavior),
           retry_initial_delay_seconds = values(retry_initial_delay_seconds),
+          next_run_at_utc = values(next_run_at_utc),
           updated_at_utc = utc_timestamp(3)
       `,
       [

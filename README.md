@@ -98,6 +98,13 @@ When hosted eventing/runtime-control credentials are configured, runtimes can sy
 - Pause/resume schedule
 - Update cron and time zone
 
+## Hosted Eventing Security
+
+When `eventing.tenantId`/`eventing.clientSecret` are configured, DurableStack posts telemetry and syncs runtime-control commands to `eventing.ingestionApiBaseUrl`. Two defaults protect that traffic:
+
+- **Error messages and stack traces are redacted by default.** Job failure events omit `errorMessage`/`errorDetail` unless `eventing.includeErrorDetail` is set to `true`, since exception text routinely contains connection strings, file paths, SQL fragments, or business data. The exception type name (e.g. `Error`, `TypeError`) is always included. This only affects events published to sinks — the run's own error message is still recorded in your database via `getRun`/`getRunsByStatus`, unredacted, since it never leaves your infrastructure. When enabled, detail is truncated to `eventing.maxErrorDetailLength` (default 4096 characters).
+- **`ingestionApiBaseUrl` must use HTTPS.** Both the ingestion and runtime-control requests carry your tenant credentials as headers, so a plain `http://` base URL is rejected at startup unless it points at a loopback address (`localhost`, `127.0.0.0/8`, or `::1`) for local development against a test endpoint.
+
 ## Getting Started
 
 - Architecture notes: `ARCHITECTURE.md`

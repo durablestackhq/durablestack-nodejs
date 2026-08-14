@@ -451,6 +451,7 @@ export class SqliteDurableJobStore implements DurableJobStore {
         allow_concurrent_runs = excluded.allow_concurrent_runs,
         retry_behavior = excluded.retry_behavior,
         retry_initial_delay_seconds = excluded.retry_initial_delay_seconds,
+        next_run_at_utc = excluded.next_run_at_utc,
         updated_at_utc = excluded.updated_at_utc
     `).run(
       registration.jobName,

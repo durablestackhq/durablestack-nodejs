@@ -282,7 +282,11 @@ export class InMemoryDurableJobStore implements DurableJobStore {
       return;
     }
 
-    const existing = this.recurring.get(registration.jobName);
+    // Always take the freshly computed next occurrence, matching the .NET runtime's
+    // InMemoryJobStore.UpsertRecurringJobAsync: a cron/time zone change registered with
+    // UpdateFromCode takes effect immediately rather than waiting for the stale schedule's
+    // next firing. (KeepDatabase skips calling upsert for existing jobs entirely, so this
+    // path only runs for new jobs or ones the caller has chosen to sync from code.)
     const next: RecurringJobState = {
       jobName: registration.jobName,
       jobType: registration.jobType,
@@ -293,7 +297,7 @@ export class InMemoryDurableJobStore implements DurableJobStore {
       allowConcurrentRuns: recurring.allowConcurrentRuns ?? false,
       retryBehavior: recurring.retryBehavior,
       retryInitialDelaySeconds: recurring.retryInitialDelaySeconds,
-      nextRunAtUtc: existing?.nextRunAtUtc ?? nextRunAtUtc
+      nextRunAtUtc
     };
 
     this.recurring.set(registration.jobName, next);

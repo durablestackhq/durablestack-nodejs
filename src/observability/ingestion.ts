@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 import { EVENT_TYPES } from "../constants.js";
 import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
+import { assertSecureEndpoint } from "./url-validation.js";
 import { generateId, nowIso, randomJittered, sleep } from "../utils.js";
 
 function normalizeRuntimeVersion(value: string): string {
@@ -237,13 +238,16 @@ export class IngestionEventSyncService {
   }
 
   private resolveEndpoint(): string {
+    let url: URL;
     try {
-      return new URL(this.options.eventing.ingestionPath, this.options.eventing.ingestionApiBaseUrl).toString();
+      url = new URL(this.options.eventing.ingestionPath, this.options.eventing.ingestionApiBaseUrl);
     } catch {
       throw new Error(
         `Invalid ingestion endpoint configuration: cannot combine ingestionApiBaseUrl '${this.options.eventing.ingestionApiBaseUrl}' with ingestionPath '${this.options.eventing.ingestionPath}'. The base URL must be absolute, including its scheme (e.g. https://).`
       );
     }
+    assertSecureEndpoint(url, "eventing.ingestionApiBaseUrl");
+    return url.toString();
   }
 
   public async flushOnce(signal: AbortSignal): Promise<void> {

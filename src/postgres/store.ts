@@ -33,7 +33,11 @@ function rowToRun(row: Record<string, unknown>): JobRunRecord {
     maxAttempts: Number(row.max_attempts),
     leaseOwner: row.lease_owner ? String(row.lease_owner) : undefined,
     leaseUntilUtc: row.lease_until_utc ? new Date(String(row.lease_until_utc)).toISOString() : undefined,
-    payloadJson: row.payload_json ? JSON.stringify(row.payload_json) : undefined,
+    // pg auto-parses jsonb into a native JS value, so a truthy check here would
+    // incorrectly treat a stored payload of `false`, `0`, or `""` as absent.
+    payloadJson: (row.payload_json === null || typeof row.payload_json === "undefined")
+      ? undefined
+      : JSON.stringify(row.payload_json),
     errorMessage: row.error_message ? String(row.error_message) : undefined
   };
 }
@@ -331,6 +335,7 @@ export class PostgresDurableJobStore implements DurableJobStore {
         allow_concurrent_runs = excluded.allow_concurrent_runs,
         retry_behavior = excluded.retry_behavior,
         retry_initial_delay_seconds = excluded.retry_initial_delay_seconds,
+        next_run_at_utc = excluded.next_run_at_utc,
         updated_at_utc = now();
     `;
 

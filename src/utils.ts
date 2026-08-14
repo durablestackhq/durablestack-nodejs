@@ -29,6 +29,19 @@ export function ensurePositive(value: number | undefined, fallback: number): num
   return value;
 }
 
+/**
+ * Like `ensurePositive`, but accepts zero. Use for settings where zero is a
+ * meaningful, distinct configuration (e.g. "don't wait at all") rather than an
+ * absent value — only a negative or non-finite input falls back to the default,
+ * matching the .NET runtime's equivalent option setters.
+ */
+export function ensureNonNegative(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return fallback;
+  }
+  return value;
+}
+
 export function safeJsonParse<T>(json: string | undefined): T | undefined {
   if (!json) {
     return undefined;

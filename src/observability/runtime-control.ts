@@ -9,6 +9,7 @@ import type {
   RecurringJobState
 } from "../types.js";
 import { defaultHttpPost, isTransientStatus, type HttpPost } from "./http.js";
+import { assertSecureEndpoint } from "./url-validation.js";
 import { generateId, nowIso, randomJittered, sleep } from "../utils.js";
 import { validateRuntimeCommandEnvelopeDto, validateRuntimeControlSyncRequest } from "../validators.js";
 
@@ -149,13 +150,16 @@ export class RuntimeControlSyncService {
   }
 
   private resolveEndpoint(): string {
+    let url: URL;
     try {
-      return new URL(this.options.eventing.runtimeControlSyncPath, this.options.eventing.ingestionApiBaseUrl).toString();
+      url = new URL(this.options.eventing.runtimeControlSyncPath, this.options.eventing.ingestionApiBaseUrl);
     } catch {
       throw new Error(
         `Invalid runtime control endpoint configuration: cannot combine ingestionApiBaseUrl '${this.options.eventing.ingestionApiBaseUrl}' with runtimeControlSyncPath '${this.options.eventing.runtimeControlSyncPath}'. The base URL must be absolute, including its scheme (e.g. https://).`
       );
     }
+    assertSecureEndpoint(url, "eventing.ingestionApiBaseUrl");
+    return url.toString();
   }
 
   public async stop(): Promise<void> {
