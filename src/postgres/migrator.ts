@@ -8,9 +8,15 @@ function q(name: string): string {
   return `"${name.replace(/"/g, "\"\"")}"`;
 }
 
+function migrationLockName(tablePrefix: string | undefined): string {
+  const base = (tablePrefix && tablePrefix.trim()) ? tablePrefix.trim() : "default";
+  const safe = base.replace(/[^A-Za-z0-9_]/g, "_");
+  return `durablestack_migrate_${safe}`;
+}
+
 export async function migratePostgres(pool: Pool, tablePrefix: string | undefined): Promise<void> {
   const tables = resolvePostgresTableNames(tablePrefix);
-  await applyPostgresMigrations(pool, tables);
+  await applyPostgresMigrations(pool, tablePrefix, tables);
   await verifyPostgresSchema(pool, tables);
 }
 
@@ -24,22 +30,32 @@ async function verifyPostgresSchema(pool: Pool, tables: PostgresTableNames): Pro
   }
 }
 
-async function applyPostgresMigrations(pool: Pool, tables: PostgresTableNames): Promise<void> {
-  await pool.query(`
-    create table if not exists ${q(tables.migrations)} (
-      version integer primary key,
-      applied_at_utc timestamptz not null
-    );
-  `);
-
-  const existing = await pool.query(`select version from ${q(tables.migrations)} where version = $1`, [SCHEMA_VERSION]);
-  if (existing.rowCount && existing.rowCount > 0) {
-    return;
-  }
-
+async function applyPostgresMigrations(
+  pool: Pool,
+  tablePrefix: string | undefined,
+  tables: PostgresTableNames
+): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("begin");
+
+    await client.query(
+      "select pg_advisory_xact_lock(hashtext($1)::bigint)",
+      [migrationLockName(tablePrefix)]
+    );
+
+    await client.query(`
+      create table if not exists ${q(tables.migrations)} (
+        version integer primary key,
+        applied_at_utc timestamptz not null
+      );
+    `);
+
+    const existing = await client.query(`select version from ${q(tables.migrations)} where version = $1`, [SCHEMA_VERSION]);
+    if (existing.rowCount && existing.rowCount > 0) {
+      await client.query("commit");
+      return;
+    }
 
     await client.query(`
       create table if not exists ${q(tables.jobs)} (

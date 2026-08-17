@@ -3,6 +3,7 @@ import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verifica
 import { resolveSqlServerTableNames, type SqlServerTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
+const SQLSERVER_MIGRATION_LOCK_TIMEOUT_MS = 30_000;
 
 function qi(name: string): string {
   return `[${name.replace(/]/g, "]]")}]`;
@@ -14,8 +15,14 @@ function ql(name: string): string {
 
 export async function migrateSqlServer(pool: sql.ConnectionPool, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveSqlServerTableNames(tablePrefix);
-  await applySqlServerMigrations(pool, tables);
+  await applySqlServerMigrations(pool, tablePrefix, tables);
   await verifySqlServerSchema(pool, tables);
+}
+
+function migrationLockName(tablePrefix: string | undefined): string {
+  const base = (tablePrefix && tablePrefix.trim()) ? tablePrefix.trim() : "default";
+  const safe = base.replace(/[^A-Za-z0-9_]/g, "_");
+  return `durablestack_migrate_${safe}`;
 }
 
 async function verifySqlServerSchema(pool: sql.ConnectionPool, tables: SqlServerTableNames): Promise<void> {
@@ -28,28 +35,51 @@ async function verifySqlServerSchema(pool: sql.ConnectionPool, tables: SqlServer
   }
 }
 
-async function applySqlServerMigrations(pool: sql.ConnectionPool, tables: SqlServerTableNames): Promise<void> {
-  await pool.request().query(`
-    if object_id(${ql(tables.migrations)}, 'U') is null
-    begin
-      create table ${qi(tables.migrations)} (
-        version int not null primary key,
-        applied_at_utc datetime2(3) not null
-      );
-    end
-  `);
-
-  const existing = await pool.request()
-    .input("version", SCHEMA_VERSION)
-    .query(`select version from ${qi(tables.migrations)} where version = @version`);
-
-  if ((existing.recordset?.length ?? 0) > 0) {
-    return;
-  }
-
+async function applySqlServerMigrations(
+  pool: sql.ConnectionPool,
+  tablePrefix: string | undefined,
+  tables: SqlServerTableNames
+): Promise<void> {
   const tx = pool.transaction();
   await tx.begin();
   try {
+    const lock = await tx.request()
+      .input("resource", sql.NVarChar(255), migrationLockName(tablePrefix))
+      .input("timeoutMs", sql.Int, SQLSERVER_MIGRATION_LOCK_TIMEOUT_MS)
+      .query(`
+        declare @result int;
+        exec @result = sp_getapplock
+          @Resource = @resource,
+          @LockMode = 'Exclusive',
+          @LockOwner = 'Transaction',
+          @LockTimeout = @timeoutMs;
+        select @result as result;
+      `);
+
+    const lockResult = Number((lock.recordset?.[0] as { result?: unknown } | undefined)?.result ?? -999);
+    if (lockResult < 0) {
+      throw new Error(`Failed to acquire SQL Server migration lock '${migrationLockName(tablePrefix)}'. Result=${lockResult}`);
+    }
+
+    await tx.request().query(`
+      if object_id(${ql(tables.migrations)}, 'U') is null
+      begin
+        create table ${qi(tables.migrations)} (
+          version int not null primary key,
+          applied_at_utc datetime2(3) not null
+        );
+      end
+    `);
+
+    const existing = await tx.request()
+      .input("version", SCHEMA_VERSION)
+      .query(`select version from ${qi(tables.migrations)} where version = @version`);
+
+    if ((existing.recordset?.length ?? 0) > 0) {
+      await tx.commit();
+      return;
+    }
+
     await tx.request().query(`
       if object_id(${ql(tables.jobs)}, 'U') is null
       begin
