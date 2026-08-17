@@ -118,3 +118,29 @@ test("sqlite migration creates baseline tables (env-gated)", async (t) => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("sqlite migration is idempotent under repeated execution (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
+  if (!sqlitePath) {
+    t.skip("DURABLESTACK_TEST_SQLITE is not set");
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "durablestack-sqlite-"));
+  const dbPath = path.join(tempDir, `it_sqlite_repeat_${Date.now().toString(36)}.db`);
+  const prefix = `itsqliterepeat_${Date.now().toString(36)}_${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}_`;
+  const db = await createSqliteDatabase(dbPath);
+  try {
+    await migrateSqlite(db, prefix);
+    await migrateSqlite(db, prefix);
+    await migrateSqlite(db, prefix);
+    assert.ok(true);
+  } finally {
+    db.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

@@ -323,3 +323,30 @@ test("sqlserver recurring schedule admin APIs update state (env-gated)", async (
     await store.close();
   }
 });
+
+test("sqlserver concurrent migrations serialize safely on migration lock (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_SQLSERVER is not set");
+    return;
+  }
+
+  const shortBase = "it_sql_mig";
+  const stamp = Date.now().toString(36);
+  const nonce = Math.floor(Math.random() * (36 * 36)).toString(36).padStart(2, "0");
+  const prefix = `${shortBase}_${stamp}_${nonce}_`;
+
+  const storeA = new SqlServerDurableJobStore({ connectionString, databaseTablePrefix: prefix });
+  const storeB = new SqlServerDurableJobStore({ connectionString, databaseTablePrefix: prefix });
+  await Promise.all([storeA.connect(), storeB.connect()]);
+
+  try {
+    await Promise.all([
+      migrateSqlServer(storeA.getPool(), prefix),
+      migrateSqlServer(storeB.getPool(), prefix),
+      migrateSqlServer(storeA.getPool(), prefix)
+    ]);
+    assert.ok(true);
+  } finally {
+    await Promise.all([storeA.close(), storeB.close()]);
+  }
+});

@@ -257,3 +257,28 @@ test("postgres enqueue-if-no-active-run deduplicates pending/leased and allows a
     await store.close();
   }
 });
+
+test("postgres concurrent migrations serialize safely on advisory lock (env-gated)", async (t) => {
+  if (!connectionString) {
+    t.skip("DURABLESTACK_TEST_POSTGRES is not set");
+    return;
+  }
+
+  const shortBase = "it_pg_mig";
+  const stamp = Date.now().toString(36);
+  const nonce = Math.floor(Math.random() * (36 * 36)).toString(36).padStart(2, "0");
+  const prefix = `${shortBase}_${stamp}_${nonce}_`;
+
+  const storeA = new PostgresDurableJobStore({ connectionString, databaseTablePrefix: prefix });
+  const storeB = new PostgresDurableJobStore({ connectionString, databaseTablePrefix: prefix });
+  try {
+    await Promise.all([
+      migratePostgres(storeA.getPool(), prefix),
+      migratePostgres(storeB.getPool(), prefix),
+      migratePostgres(storeA.getPool(), prefix)
+    ]);
+    assert.ok(true);
+  } finally {
+    await Promise.all([storeA.close(), storeB.close()]);
+  }
+});
