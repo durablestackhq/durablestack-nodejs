@@ -144,3 +144,34 @@ test("sqlite migration is idempotent under repeated execution (env-gated)", asyn
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("sqlite concurrent migrations against the same file eventually succeed (env-gated)", async (t) => {
+  if (!await supportsNodeSqlite()) {
+    t.skip("node:sqlite is not available in this Node runtime");
+    return;
+  }
+
+  if (!sqlitePath) {
+    t.skip("DURABLESTACK_TEST_SQLITE is not set");
+    return;
+  }
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "durablestack-sqlite-"));
+  const dbPath = path.join(tempDir, `it_sqlite_concurrent_${Date.now().toString(36)}.db`);
+  const prefix = `itsqliteconcurrent_${Date.now().toString(36)}_${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}_`;
+
+  const dbA = await createSqliteDatabase(dbPath);
+  const dbB = await createSqliteDatabase(dbPath);
+  try {
+    await Promise.all([
+      migrateSqlite(dbA, prefix),
+      migrateSqlite(dbB, prefix),
+      migrateSqlite(dbA, prefix)
+    ]);
+    assert.ok(true);
+  } finally {
+    dbA.close();
+    dbB.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
