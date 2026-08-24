@@ -4,6 +4,8 @@ import { buildSchemaProbes, createSchemaMismatchError } from "../schema-verifica
 import { resolveSqliteTableNames, type SqliteTableNames } from "./table-names.js";
 
 const SCHEMA_VERSION = 1;
+const SQLITE_BUSY_RETRY_ATTEMPTS = 25;
+const SQLITE_BUSY_RETRY_DELAY_MS = 100;
 
 export interface SqliteDatabaseLike {
   exec(sql: string): void;
@@ -21,8 +23,29 @@ function qi(name: string): string {
 
 export async function migrateSqlite(db: SqliteDatabaseLike, tablePrefix: string | undefined): Promise<void> {
   const tables = resolveSqliteTableNames(tablePrefix);
-  applySqliteMigrations(db, tables);
+  for (let attempt = 1; attempt <= SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      applySqliteMigrations(db, tables);
+      break;
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt >= SQLITE_BUSY_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SQLITE_BUSY_RETRY_DELAY_MS));
+    }
+  }
   verifySqliteSchema(db, tables);
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  const message = String((error as { message?: unknown })?.message ?? "").toLowerCase();
+  const errstr = String((error as { errstr?: unknown })?.errstr ?? "").toLowerCase();
+  const code = String((error as { code?: unknown })?.code ?? "").toUpperCase();
+  const errcode = Number((error as { errcode?: unknown })?.errcode ?? 0);
+  return code === "SQLITE_BUSY"
+    || errcode === 5
+    || message.includes("database is locked")
+    || errstr.includes("database is locked");
 }
 
 function verifySqliteSchema(db: SqliteDatabaseLike, tables: SqliteTableNames): void {
@@ -141,5 +164,8 @@ export async function createSqliteDatabase(databasePath: string): Promise<Sqlite
     );
   }
 
-  return new sqliteModule.DatabaseSync(databasePath);
+  const db = new sqliteModule.DatabaseSync(databasePath);
+  db.exec("pragma journal_mode = wal;");
+  db.exec("pragma busy_timeout = 5000;");
+  return db;
 }
