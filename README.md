@@ -114,7 +114,7 @@ When `eventing.tenantId`/`eventing.clientSecret` are configured, DurableStack po
 
 ## Status
 
-Current focus is prerelease hardening and packaging for real-world testing.
+DurableStack for Node.js is stable at 1.2.x and published on [npm](https://www.npmjs.com/package/durablestack).
 
 ---
 
